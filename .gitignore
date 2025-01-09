@@ -1,1 +1,4 @@
 Tradingrobotplug2/
+# Ignore coverage and environment files
+.env
+.coverage

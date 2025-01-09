@@ -5,7 +5,8 @@ import asyncio
 from unittest.mock import patch, MagicMock
 import pandas as pd
 from aioresponses import aioresponses
-from .data_fetch_utils import DataFetchUtils
+from TradingRobotPlug2.data_fetch_utils import DataFetchUtils
+
 
 @pytest.fixture
 def data_fetch_utils():
