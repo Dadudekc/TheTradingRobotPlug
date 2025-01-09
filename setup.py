@@ -4,8 +4,8 @@ setup(
     name="TradingRobotPlug",
     version="1.0.0",
     description="A utility project for fetching and processing financial data from APIs and news sources.",
-    author="Your Name",
-    author_email="your_email@example.com",
+    author="Victor Dixon",
+    author_email="DaDuedKC@gmail.com",
     url="https://github.com/Dadudekc/TheTradingRobotPlug",
     packages=find_packages(exclude=["tests*", "docs*"]),
     include_package_data=True,
@@ -33,7 +33,7 @@ setup(
     python_requires=">=3.8",
     entry_points={
         "console_scripts": [
-            "run-trading-bot=your_project.main:main",  # Update based on your entry point
+            "run-trading-bot=your_project.main:main",
         ],
     },
 )
