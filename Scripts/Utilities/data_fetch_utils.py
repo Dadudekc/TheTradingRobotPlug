@@ -261,8 +261,6 @@ class DataFetchUtils:
             bars.rename(columns={'timestamp': 'date', 'trade_count': 'volume'}, inplace=True)
             bars['date'] = pd.to_datetime(bars['date']).dt.date  # Ensure date is properly formatted
             bars.set_index('date', inplace=True)  # Set 'date' as index
-            # Remove the following line to prevent dropping 'date' column
-            # bars.drop(columns=['date'], errors='ignore', inplace=True)  # Remove duplicate 'date' column, if present
             bars['symbol'] = symbol  # Add the symbol column
 
             return bars
@@ -506,7 +504,7 @@ class DataFetchUtils:
         return df
 
     # -------------------------------------------------------------------
-    # Fetch Finnhub Data (Quote and Metrics)
+    # Fetch Finnhub Metrics
     # -------------------------------------------------------------------
 
     async def fetch_finnhub_metrics(self, symbol: str, session: ClientSession) -> pd.DataFrame:
@@ -527,10 +525,6 @@ class DataFetchUtils:
 
         return self._parse_finnhub_metrics_data(data)
 
-
-
-
-
     def _parse_finnhub_metrics_data(self, data: Dict[str, Any]) -> pd.DataFrame:
         """
         Parses Finnhub financial metrics data into a pandas DataFrame.
@@ -545,30 +539,8 @@ class DataFetchUtils:
         df.set_index("date_fetched", inplace=True)
         return df
 
-
-    # -------------------------------------------------------------------
-    # Parse YFinance Data
-    # -------------------------------------------------------------------
-
-    def _parse_finnhub_metrics_data(self, data: Dict[str, Any]) -> pd.DataFrame:
-        """
-        Parses Finnhub financial metrics data into a pandas DataFrame.
-        """
-        metrics = data.get("metric", {})
-        if not metrics:
-            self.logger.error("No metric data found in Finnhub response.")
-            return pd.DataFrame(columns=["date_fetched"])  # Ensure the DataFrame has this column
-
-        df = pd.DataFrame([metrics])
-        df["date_fetched"] = pd.Timestamp.utcnow()  # Add a consistent timestamp
-        df.set_index("date_fetched", inplace=True)
-        return df
-
-
-
     # -------------------------------------------------------------------
     # Additional Helper Methods
     # -------------------------------------------------------------------
 
     # Add any additional helper methods as needed, such as parsing methods for other APIs.
-

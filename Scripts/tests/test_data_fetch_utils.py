@@ -5,6 +5,7 @@ from datetime import datetime, date
 import re
 from aioresponses import aioresponses  
 import aiohttp
+import numpy as np
 
 @pytest.fixture
 def data_fetch_utils_fixture(monkeypatch):
@@ -583,4 +584,60 @@ async def test_fetch_finnhub_metrics_success(data_fetch_utils_fixture):
     expected_df["date_fetched"] = expected_df["date_fetched"].dt.tz_localize(None).astype('datetime64[ns]')
 
     # Compare DataFrames
+    pd.testing.assert_frame_equal(result, expected_df)
+
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_empty_time_series(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "Time Series (Daily)": {}
+    }
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Expect an empty DataFrame due to no data
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when time series is empty."
+@pytest.mark.asyncio
+async def test_fetch_finnhub_data_success(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "metric": {
+            "some_metric": 123,
+            "another_metric": 456
+        }
+    }
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?symbol={symbol}&metric=all&token=test_finnhub_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Assuming _parse_finnhub_metrics_data parses 'some_metric' and 'another_metric'
+    expected_df = pd.DataFrame([{
+        "some_metric": 123,
+        "another_metric": 456,
+        "date_fetched": pd.Timestamp.utcnow().floor("s")
+    }]).set_index("date_fetched")
+
+    # Normalize timezones to naive datetime64[ns]
+    result = result.reset_index()
+    expected_df = expected_df.reset_index()
+    result["date_fetched"] = result["date_fetched"].dt.tz_localize(None).astype('datetime64[ns]')
+    expected_df["date_fetched"] = expected_df["date_fetched"].dt.tz_localize(None).astype('datetime64[ns]')
+
     pd.testing.assert_frame_equal(result, expected_df)
