@@ -16,6 +16,7 @@ import yfinance as yf
 from datetime import datetime
 import numpy as np
 from Scripts.Utilities.config_manager import setup_logging
+from datetime import timezone
 
 # -------------------------------------------------------------------
 # Locate and load environment
@@ -490,7 +491,7 @@ class DataFetchUtils:
 
         parsed_results = [
             {
-                'date': datetime.utcfromtimestamp(item['t'] / 1000).date(),
+                'date': datetime.fromtimestamp(item['t'] / 1000, tz=timezone.utc).date(),
                 'open': item['o'],
                 'high': item['h'],
                 'low': item['l'],

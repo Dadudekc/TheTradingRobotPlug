@@ -412,3 +412,49 @@ async def test_fetch_data_for_mixed_symbols(data_fetch_utils_fixture):
     assert 'INVALID' in result, "INVALID symbol should still appear in the result."
     assert 'Alpha Vantage' in result['INVALID'], "Alpha Vantage data source should be present for INVALID."
     assert result['INVALID']['Alpha Vantage'].empty, "Expected an empty DataFrame for INVALID symbol."
+
+@pytest.mark.asyncio
+async def test_fetch_polygon_data_success(data_fetch_utils_fixture):
+    symbol = 'AAPL'
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    mock_response = {
+        "results": [
+            {
+                "t": 1672531200000,  # Timestamp in milliseconds (2023-01-01)
+                "o": 130.0,
+                "h": 132.0,
+                "l": 129.0,
+                "c": 131.0,
+                "v": 1000000
+            },
+            {
+                "t": 1672617600000,  # Timestamp in milliseconds (2023-01-02)
+                "o": 131.0,
+                "h": 133.0,
+                "l": 130.0,
+                "c": 132.0,
+                "v": 1500000
+            }
+        ]
+    }
+
+
+    expected_df = pd.DataFrame({
+        'open': [130.0, 131.0],
+        'high': [132.0, 133.0],
+        'low': [129.0, 130.0],
+        'close': [131.0, 132.0],
+        'volume': [1000000, 1500000]
+    }, index=pd.to_datetime(['2023-01-01', '2023-01-02']).date).rename_axis('date')
+
+    with aioresponses() as mocked:
+        url_pattern = re.compile(
+            rf"https://api\.polygon\.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}\?adjusted=true&apiKey=test_polygonio_key"
+        )
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_polygon_data(symbol, session, start_date, end_date)
+
+    pd.testing.assert_frame_equal(result, expected_df)
