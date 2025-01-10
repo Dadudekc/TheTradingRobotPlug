@@ -458,3 +458,129 @@ async def test_fetch_polygon_data_success(data_fetch_utils_fixture):
             result = await data_fetch_utils_fixture.fetch_polygon_data(symbol, session, start_date, end_date)
 
     pd.testing.assert_frame_equal(result, expected_df)
+
+"""
+@pytest.mark.asyncio
+async def test_fetch_with_retries(data_fetch_utils_fixture):
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+
+    # Mock response for rate limit (429) and eventual success
+    with aioresponses() as mocked:
+        # First two attempts return 429 (rate limit)
+        mocked.get(url, status=429)
+        mocked.get(url, status=429)
+        # Third attempt returns success
+        mocked.get(url, payload={"data": "success"}, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result after retries
+    assert result == {"data": "success"}, "Expected successful response after retries."
+
+    # Test scenario where all retries fail
+    with aioresponses() as mocked:
+        # All attempts return 500 (server error)
+        mocked.get(url, status=500, repeat=True)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result is None after exceeding retries
+    assert result is None, "Expected None when all retries fail."
+
+"""
+
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_missing_metric(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {}  # Missing "metric"
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame with 'date_fetched' column
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when 'metric' is missing."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_malformed_data(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "metric": "invalid_data"
+    }
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame due to malformed data
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when data is malformed."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_success(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "metric": {
+            "52WeekHigh": 150.0,
+            "52WeekLow": 100.0,
+            "MarketCapitalization": 2500.0,
+            "P/E": 25.0,
+        }
+    }
+
+    # Fixed timestamp for consistency
+    fixed_time = pd.Timestamp('2025-01-10 03:45:03', tz="UTC").floor("s")
+
+    expected_df = pd.DataFrame([{
+        "52WeekHigh": 150.0,
+        "52WeekLow": 100.0,
+        "MarketCapitalization": 2500.0,
+        "P/E": 25.0,
+        "date_fetched": fixed_time,
+    }]).set_index("date_fetched")
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with patch("pandas.Timestamp.utcnow", return_value=fixed_time):
+        with aioresponses() as mocked:
+            mocked.get(url_pattern, payload=mock_response, status=200)
+
+            async with aiohttp.ClientSession() as session:
+                result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Ensure that result is not empty
+    assert not result.empty, "Expected a non-empty DataFrame."
+
+    # Reset index for comparison
+    result = result.reset_index()
+    expected_df = expected_df.reset_index()
+
+    # Normalize timezones to naive datetime64[ns]
+    result["date_fetched"] = result["date_fetched"].dt.tz_localize(None).astype('datetime64[ns]')
+    expected_df["date_fetched"] = expected_df["date_fetched"].dt.tz_localize(None).astype('datetime64[ns]')
+
+    # Compare DataFrames
+    pd.testing.assert_frame_equal(result, expected_df)

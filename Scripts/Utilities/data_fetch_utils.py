@@ -509,31 +509,27 @@ class DataFetchUtils:
     # Fetch Finnhub Data (Quote and Metrics)
     # -------------------------------------------------------------------
 
-    async def fetch_finnhub_metrics(self, symbol: str, session: ClientSession) -> Optional[Dict[str, Any]]:
+    async def fetch_finnhub_metrics(self, symbol: str, session: ClientSession) -> pd.DataFrame:
         """
         Fetches financial metrics from Finnhub.
         """
         if not self.finnhub_api_key:
             self.logger.error("Finnhub API key is not set. Cannot fetch metrics.")
-            return None
+            return pd.DataFrame()
 
         url = f"https://finnhub.io/api/v1/stock/metric?symbol={symbol}&metric=all&token={self.finnhub_api_key}"
         self.logger.info(f"Fetching Finnhub financial metrics for symbol: {symbol}")
         data = await self.fetch_with_retries(url, headers={}, session=session)
-        return data
 
-    async def fetch_finnhub_data(self, symbol: str, session: ClientSession, start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:
-        """
-        Aggregates Finnhub quote and metrics data into a dictionary of DataFrames.
-        """
-        self.logger.info(f"Fetching Finnhub data for symbol: {symbol}")
-        quote_data = await self.fetch_finnhub_quote(symbol, session)
-        metrics_data = await self.fetch_finnhub_metrics(symbol, session)
+        if not data or not isinstance(data.get("metric"), dict):
+            self.logger.error("No valid metric data found in Finnhub response.")
+            return pd.DataFrame(columns=["date_fetched"])  # Return an empty DataFrame with the required column
 
-        return {
-            "quote": quote_data if not quote_data.empty else pd.DataFrame(),
-            "metrics": self._parse_finnhub_metrics_data(metrics_data) if metrics_data else pd.DataFrame(),
-        }
+        return self._parse_finnhub_metrics_data(data)
+
+
+
+
 
     def _parse_finnhub_metrics_data(self, data: Dict[str, Any]) -> pd.DataFrame:
         """
@@ -542,26 +538,33 @@ class DataFetchUtils:
         metrics = data.get("metric", {})
         if not metrics:
             self.logger.error("No metric data found in Finnhub response.")
-            return pd.DataFrame()
+            return pd.DataFrame(columns=["date_fetched"])  # Ensure the DataFrame has this column
 
         df = pd.DataFrame([metrics])
-        df['date_fetched'] = datetime.utcnow()
-        df.set_index('date_fetched', inplace=True)
+        df["date_fetched"] = pd.Timestamp.utcnow().floor("s")  # Add a consistent timestamp
+        df.set_index("date_fetched", inplace=True)
         return df
+
 
     # -------------------------------------------------------------------
     # Parse YFinance Data
     # -------------------------------------------------------------------
 
-    def _parse_yfinance_data(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _parse_finnhub_metrics_data(self, data: Dict[str, Any]) -> pd.DataFrame:
         """
-        Parses Yahoo Finance data into a pandas DataFrame.
+        Parses Finnhub financial metrics data into a pandas DataFrame.
         """
-        if data.empty:
-            self.logger.error("Yahoo Finance data is empty.")
-            return pd.DataFrame()
-        # Assuming 'date' is already set as index
-        return data
+        metrics = data.get("metric", {})
+        if not metrics:
+            self.logger.error("No metric data found in Finnhub response.")
+            return pd.DataFrame(columns=["date_fetched"])  # Ensure the DataFrame has this column
+
+        df = pd.DataFrame([metrics])
+        df["date_fetched"] = pd.Timestamp.utcnow()  # Add a consistent timestamp
+        df.set_index("date_fetched", inplace=True)
+        return df
+
+
 
     # -------------------------------------------------------------------
     # Additional Helper Methods
