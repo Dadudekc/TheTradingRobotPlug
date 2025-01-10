@@ -1,7 +1,10 @@
-# Filename: config_manager.py
+# Scripts/Utilities/config_manager.py
+# -------------------------------------------------------------------
+# File Path: Scripts/Utilities/config_manager.py
 # Description: Manages configuration and environment variables for the TradingRobotPlug project.
 #              Supports loading from environment variables, .env files, YAML, JSON, and TOML files.
 #              Provides type casting, validation, and dynamic reloading capabilities.
+# -------------------------------------------------------------------
 
 import os
 import yaml
@@ -13,8 +16,6 @@ from collections import defaultdict
 import logging
 from typing import Any, Optional, List, Dict, Union, Type
 import threading
-import logging
-from pathlib import Path
 
 class ConfigManager:
     def __init__(self, 
@@ -376,26 +377,30 @@ class ConfigManager:
 
         return logger
 
+def setup_logging(script_name: str, log_dir: Path, max_log_size: int = 5 * 1024 * 1024, backup_count: int = 3) -> logging.Logger:
+    logger = logging.getLogger(script_name)
+    logger.setLevel(logging.DEBUG)
 
-    def setup_logging(script_name: str, log_dir: Path, max_log_size: int = 5 * 1024 * 1024, backup_count: int = 3):
-        logger = logging.getLogger(script_name)
-        logger.setLevel(logging.DEBUG)
+    if not logger.handlers:
+        # Ensure log directory exists
+        log_dir.mkdir(parents=True, exist_ok=True)
 
-        if not logger.handlers:
-            # File handler
-            file_handler = logging.FileHandler(log_dir / f"{script_name}.log")
-            file_handler.setLevel(logging.DEBUG)
-            file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-            file_handler.setFormatter(file_formatter)
+        # File handler
+        log_file = log_dir / f"{script_name}.log"
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
 
-            # Console handler
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
-            console_formatter = logging.Formatter('%(message)s')
-            console_handler.setFormatter(console_formatter)
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
 
-            # Add handlers
-            logger.addHandler(file_handler)
-            logger.addHandler(console_handler)
+        # Formatter
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
 
-        return logger
+        # Add handlers to logger
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+
+    return logger

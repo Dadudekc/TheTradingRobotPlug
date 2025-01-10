@@ -1,5 +1,6 @@
+# TRP2/Utilities/data_fetch_utils.py
 # -------------------------------------------------------------------
-# File Path: data_fetch_utils.py
+# File Path: TRP2/Utilities/data_fetch_utils.py
 # Description: A utility module for fetching and processing data from 
 #              financial APIs (e.g., Alpaca, Polygon, Yahoo Finance) 
 #              and news sources (e.g., NewsAPI) with integrated logging,
@@ -17,15 +18,15 @@ from aiohttp import ClientSession, ClientConnectionError, ContentTypeError
 from pathlib import Path
 from dotenv import load_dotenv
 import alpaca_trade_api as tradeapi
-import logging  # Added import
-import requests  # Added import
-from textblob import TextBlob  # Added import
-import inspect  # Added import
-import yfinance as yf  # Corrected import
+import logging
+import requests
+from textblob import TextBlob
+import inspect
+import yfinance as yf
+from datetime import datetime
 
 # Import setup_logging from external logging module
-from TRP2.Utilities.config_manager import ConfigManager
-
+from Scripts.Utilities.config_manager import setup_logging
 
 # -------------------------------------------------------------------
 # Dynamic Project Root Setup
@@ -76,10 +77,7 @@ LOGGER = setup_logging(
     script_name="data_fetch_utils",
     log_dir=DIRECTORIES['logs'],
     max_log_size=5 * 1024 * 1024,
-    backup_count=3,
-    console_log_level=20,  # INFO level
-    file_log_level=10,  # DEBUG level
-    feedback_loop_enabled=False  # Optional: Enable if necessary
+    backup_count=3
 )
 
 # -------------------------------------------------------------------
@@ -107,7 +105,7 @@ def initialize_alpaca() -> Optional[tradeapi.REST]:
 ALPACA_CLIENT = initialize_alpaca()
 
 # -------------------------------------------------------------------
-# Section 2: DataFetchUtils Class Definition
+# DataFetchUtils Class Definition
 # -------------------------------------------------------------------
 
 class DataFetchUtils:
@@ -134,7 +132,7 @@ class DataFetchUtils:
             self.alpaca_api = None  # Continue without Alpaca if initialization fails
 
     # -------------------------------------------------------------------
-    # Section 3: Fetching Data with Retry Logic
+    # Fetching Data with Retry Logic
     # -------------------------------------------------------------------
 
     async def fetch_data(self, source_params: Dict) -> pd.DataFrame:
@@ -240,29 +238,39 @@ class DataFetchUtils:
         return None
 
     # -------------------------------------------------------------------
-    # Section 4: Fetching Real-Time Stock Quotes
+    # Fetching Real-Time Stock Quotes
     # -------------------------------------------------------------------
 
-    async def fetch_finnhub_quote(self, symbol: str, session: ClientSession) -> Optional[Dict[str, Any]]:
-        """
-        Fetches the latest stock quote data for a given symbol from Finnhub.
+    async def fetch_finnhub_quote(self, symbol, session):
+        url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={self.finnhub_api_key}"
+        try:
+            async with session.get(url) as response:
+                response.raise_for_status()
+                data = await response.json()
 
-        :param symbol: Stock symbol (e.g., 'AAPL').
-        :param session: An active aiohttp ClientSession.
-        :return: Parsed JSON data as a dictionary or None if failed.
-        """
-        finnhub_api_key = os.getenv('FINNHUB_API_KEY')
-        if not finnhub_api_key:
-            self.logger.error("Finnhub API key is not set in environment variables.")
-            return None
+                # Debug: Log the response data
+                self.logger.debug(f"Finnhub response for {symbol}: {data}")
 
-        url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={finnhub_api_key}"
-        self.logger.info(f"Fetching Finnhub quote for symbol: {symbol}")
+                if data:
+                    df = pd.DataFrame([{
+                        'date': pd.to_datetime(data['t'], unit='s'),
+                        'current_price': data['c'],
+                        'change': data['d'],
+                        'percent_change': data['dp'],
+                        'high': data['h'],
+                        'low': data['l'],
+                        'open': data['o'],
+                        'previous_close': data['pc']
+                    }]).set_index('date')
+                    return df
+                return pd.DataFrame()
+        except Exception as e:
+            self.logger.error(f"Failed to fetch data from {url}. Error: {e}")
+            return pd.DataFrame()
 
-        return await self.fetch_with_retries(url, headers={}, session=session)
 
     # -------------------------------------------------------------------
-    # Section 5: Fetching Basic Financial Metrics
+    # Fetching Basic Financial Metrics
     # -------------------------------------------------------------------
 
     async def fetch_finnhub_metrics(self, symbol: str, session: ClientSession) -> Optional[Dict[str, Any]]:
@@ -284,7 +292,7 @@ class DataFetchUtils:
         return await self.fetch_with_retries(url, headers={}, session=session)
 
     # -------------------------------------------------------------------
-    # Section 6: Fetching Stock Symbols for an Exchange
+    # Fetching Stock Symbols for an Exchange
     # -------------------------------------------------------------------
 
     async def fetch_finnhub_symbols(self, exchange: str, session: ClientSession) -> Optional[List[Dict[str, Any]]]:
@@ -306,7 +314,7 @@ class DataFetchUtils:
         return await self.fetch_with_retries(url, headers={}, session=session)
 
     # -------------------------------------------------------------------
-    # Section 7: Fetching Company News
+    # Fetching Company News
     # -------------------------------------------------------------------
 
     async def fetch_company_news(self, symbol: str, from_date: str, to_date: str, session: ClientSession) -> Optional[List[Dict[str, Any]]]:
@@ -330,7 +338,7 @@ class DataFetchUtils:
         return await self.fetch_with_retries(url, headers={}, session=session)
 
     # -------------------------------------------------------------------
-    # Section 8: Fetching Stock Data Using yfinance
+    # Fetching Stock Data Using yfinance
     # -------------------------------------------------------------------
 
     def get_stock_data(self, ticker: str, start_date: str = "2022-01-01", end_date: Optional[str] = None, interval: str = "1d") -> pd.DataFrame:
@@ -385,7 +393,7 @@ class DataFetchUtils:
         return await loop.run_in_executor(None, self.get_stock_data, ticker, start_date, end_date, interval)
 
     # -------------------------------------------------------------------
-    # Section 9: Fetching News Data Using NewsAPI
+    # Fetching News Data Using NewsAPI
     # -------------------------------------------------------------------
 
     def get_news_data(self, ticker: str, page_size: int = 5) -> pd.DataFrame:
@@ -441,12 +449,19 @@ class DataFetchUtils:
         return await loop.run_in_executor(None, self.get_news_data, ticker, page_size)
 
     # -------------------------------------------------------------------
-    # Section 10: Fetching Alpaca Data
+    # Fetching Alpaca Data
     # -------------------------------------------------------------------
 
     async def fetch_alpaca_data_async(self, symbol: str, start_date: str, end_date: str, interval: str = "1Day") -> pd.DataFrame:
         """
         Fetches historical stock data for a symbol from Alpaca asynchronously.
+
+        :param symbol: Stock symbol.
+        :param start_date: Start date for fetching data (YYYY-MM-DD).
+        :param end_date: End date for fetching data (YYYY-MM-DD).
+        :param interval: Data interval (e.g., '1Day').
+
+        :return: DataFrame containing the fetched data.
         """
         if not self.alpaca_api:
             self.logger.error("Alpaca API client is not initialized.")
@@ -486,7 +501,7 @@ class DataFetchUtils:
             return pd.DataFrame()
 
     # -------------------------------------------------------------------
-    # Section 11: Converting JSON to DataFrame
+    # Converting JSON to DataFrame
     # -------------------------------------------------------------------
 
     def convert_json_to_dataframe(self, data: Any, api_source: str) -> pd.DataFrame:
@@ -522,7 +537,7 @@ class DataFetchUtils:
             raise ValueError(f"Unknown API source: {api_source}")
 
     # -------------------------------------------------------------------
-    # Section 12: Data Parsing for Different APIs
+    # Data Parsing for Different APIs
     # -------------------------------------------------------------------
 
     def _parse_alphavantage_data(self, data: dict) -> pd.DataFrame:
@@ -665,7 +680,7 @@ class DataFetchUtils:
         return data
 
     # -------------------------------------------------------------------
-    # Section 13: Fetching Data for Multiple Symbols and Projects
+    # Fetching Data for Multiple Symbols and Projects
     # -------------------------------------------------------------------
 
     async def fetch_data_for_multiple_symbols(
@@ -789,7 +804,7 @@ class DataFetchUtils:
         url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}?adjusted=true&apiKey={api_key}"
         data = await self.fetch_with_retries(url, headers={}, session=session)
         return self.convert_json_to_dataframe(data, "polygon")
-    
+
     async def fetch_finnhub_data(self, symbol: str, session: aiohttp.ClientSession, start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:
         """
         Fetches financial and quote data from Finnhub.

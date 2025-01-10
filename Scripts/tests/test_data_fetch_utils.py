@@ -1,26 +1,27 @@
 # tests/test_data_fetch_utils.py
 
 import pytest
-import asyncio
 from unittest.mock import patch, MagicMock
 import pandas as pd
 from aioresponses import aioresponses
-from TRP2.Utilities.data_fetch_utils import DataFetchUtils
-from TRP2.Utilities.config_manager import ConfigManager
-
+import aiohttp  # Ensure aiohttp is imported
+import os  # Ensure os is imported
+from Scripts.Utilities.data_fetch_utils import DataFetchUtils
 
 @pytest.fixture
 def data_fetch_utils():
-    with patch('data_fetch_utils.setup_logging') as mock_logging_setup:
+    with patch('Scripts.Utilities.config_manager.setup_logging') as mock_logging_setup:
         mock_logger = MagicMock()
         mock_logging_setup.return_value = mock_logger
-        # Mock environment variables
-        with patch.dict('os.environ', {
+        # Correctly patch os.environ within the data_fetch_utils module before importing DataFetchUtils
+        with patch.dict('Scripts.Utilities.data_fetch_utils.os.environ', {
             'NEWSAPI_API_KEY': 'test_newsapi_key',
             'FINNHUB_API_KEY': 'test_finnhub_key',
             'ALPACA_API_KEY': 'test_alpaca_key',
             'ALPACA_SECRET_KEY': 'test_alpaca_secret',
-            'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets'
+            'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
+            'ALPHAVANTAGE_API_KEY': 'test_alphavantage_key',
+            'POLYGONIO_API_KEY': 'test_polygonio_key'
         }):
             yield DataFetchUtils()
 
@@ -41,18 +42,19 @@ async def test_fetch_finnhub_quote_success(data_fetch_utils):
 
     with aioresponses() as mocked:
         mocked.get(url, payload=mock_response, status=200)
-        result = await data_fetch_utils.fetch_finnhub_quote(symbol, MagicMock())
-        expected_df = pd.DataFrame([{
-            'date': pd.to_datetime(1618308000, unit='s'),
-            'current_price': 150.0,
-            'change': 2.5,
-            'percent_change': 1.7,
-            'high': 151.0,
-            'low': 149.0,
-            'open': 148.5,
-            'previous_close': 147.5
-        }]).set_index('date')
-        pd.testing.assert_frame_equal(result, expected_df)
+        result = await data_fetch_utils.fetch_finnhub_quote(symbol)
+
+    expected_df = pd.DataFrame([{
+        'date': pd.to_datetime(1618308000, unit='s'),
+        'current_price': 150.0,
+        'change': 2.5,
+        'percent_change': 1.7,
+        'high': 151.0,
+        'low': 149.0,
+        'open': 148.5,
+        'previous_close': 147.5
+    }]).set_index('date')
+    pd.testing.assert_frame_equal(result, expected_df)
 
 @pytest.mark.asyncio
 async def test_fetch_finnhub_quote_failure(data_fetch_utils):
@@ -61,13 +63,15 @@ async def test_fetch_finnhub_quote_failure(data_fetch_utils):
 
     with aioresponses() as mocked:
         mocked.get(url, status=500)
-        result = await data_fetch_utils.fetch_finnhub_quote(symbol, MagicMock())
-        assert result.empty
+        result = await data_fetch_utils.fetch_finnhub_quote(symbol)
+    # Ensure result is a DataFrame even on failure
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
 
 @pytest.mark.asyncio
 async def test_fetch_news_data_async_success(data_fetch_utils):
     symbol = 'AAPL'
-    url = f'https://newsapi.org/v2/everything?q={symbol}&pageSize=5&apiKey=test_newsapi_key'
+    url = f'https://newsapi.org/v2/everything?q={symbol}&pageSize=1&apiKey=test_newsapi_key'
     mock_response = {
         'articles': [
             {
@@ -84,18 +88,19 @@ async def test_fetch_news_data_async_success(data_fetch_utils):
     with aioresponses() as mocked:
         mocked.get(url, payload=mock_response, status=200)
         result = await data_fetch_utils.fetch_news_data_async(symbol, page_size=1)
-        expected_df = pd.DataFrame([
-            {
-                'date': pd.to_datetime('2023-04-14').date(),
-                'headline': 'Apple Releases New Product',
-                'content': 'Apple has released a new product...',
-                'symbol': 'AAPL',
-                'source': 'TechCrunch',
-                'url': 'https://techcrunch.com/apple-new-product',
-                'sentiment': 0.0  # Assuming neutral sentiment; adjust if TextBlob returns differently
-            }
-        ]).set_index('date')
-        pd.testing.assert_frame_equal(result, expected_df)
+    
+    expected_df = pd.DataFrame([
+        {
+            'date': pd.to_datetime('2023-04-14').date(),
+            'headline': 'Apple Releases New Product',
+            'content': 'Apple has released a new product...',
+            'symbol': 'AAPL',
+            'source': 'TechCrunch',
+            'url': 'https://techcrunch.com/apple-new-product',
+            'sentiment': 0.0  # Assuming neutral sentiment; adjust if TextBlob returns differently
+        }
+    ]).set_index('date')
+    pd.testing.assert_frame_equal(result, expected_df)
 
 @pytest.mark.asyncio
 async def test_fetch_news_data_async_failure(data_fetch_utils):
@@ -105,7 +110,10 @@ async def test_fetch_news_data_async_failure(data_fetch_utils):
     with aioresponses() as mocked:
         mocked.get(url, status=429)  # Simulate rate limiting
         result = await data_fetch_utils.fetch_news_data_async(symbol, page_size=5)
-        assert result.empty
+    
+    # Ensure result is a DataFrame even on failure
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
 
 @pytest.mark.asyncio
 async def test_fetch_stock_data_async(data_fetch_utils):
@@ -113,6 +121,7 @@ async def test_fetch_stock_data_async(data_fetch_utils):
     start_date = '2023-01-01'
     end_date = '2023-01-31'
     interval = '1d'
+    url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1=1672531200&period2=1675209600&interval={interval}&events=history&includeAdjustedClose=true"
     expected_data = pd.DataFrame({
         'date': pd.to_datetime(['2023-01-03', '2023-01-04']),
         'open': [130.0, 131.0],
@@ -126,7 +135,8 @@ async def test_fetch_stock_data_async(data_fetch_utils):
     with patch('yfinance.download') as mock_yf_download:
         mock_yf_download.return_value = expected_data.reset_index()
         result = await data_fetch_utils.fetch_stock_data_async(ticker, start_date, end_date, interval)
-        pd.testing.assert_frame_equal(result, expected_data)
+    
+    pd.testing.assert_frame_equal(result, expected_data)
 
 @pytest.mark.asyncio
 async def test_fetch_alpaca_data_async_success(data_fetch_utils):
@@ -135,19 +145,20 @@ async def test_fetch_alpaca_data_async_success(data_fetch_utils):
     end_date = '2023-01-31'
     interval = '1Day'
     mock_bars_df = pd.DataFrame({
-        'date': [pd.Timestamp('2023-01-03'), pd.Timestamp('2023-01-04')],
+        'timestamp': [pd.Timestamp('2023-01-03'), pd.Timestamp('2023-01-04')],
         'open': [130.0, 131.0],
         'high': [132.0, 133.0],
         'low': [129.0, 130.0],
         'close': [131.0, 132.0],
-        'volume': [1000000, 1500000],
+        'trade_count': [1000000, 1500000],
         'symbol': ['AAPL', 'AAPL']
     })
 
     with patch.object(data_fetch_utils.alpaca_api, 'get_bars', return_value=MagicMock(df=mock_bars_df)):
         result = await data_fetch_utils.fetch_alpaca_data_async(symbol, start_date, end_date, interval)
-        expected_df = mock_bars_df.set_index('date')
-        pd.testing.assert_frame_equal(result, expected_df)
+    
+    expected_df = mock_bars_df.rename(columns={'timestamp': 'date', 'trade_count': 'volume'}).set_index('date')
+    pd.testing.assert_frame_equal(result, expected_df)
 
 @pytest.mark.asyncio
 async def test_fetch_alpaca_data_async_failure(data_fetch_utils):
@@ -158,7 +169,10 @@ async def test_fetch_alpaca_data_async_failure(data_fetch_utils):
 
     with patch.object(data_fetch_utils.alpaca_api, 'get_bars', side_effect=Exception("API Error")):
         result = await data_fetch_utils.fetch_alpaca_data_async(symbol, start_date, end_date, interval)
-        assert result.empty
+    
+    # Ensure result is a DataFrame even on failure
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
 
 @pytest.mark.asyncio
 async def test_fetch_data_for_multiple_symbols(data_fetch_utils):
@@ -170,14 +184,14 @@ async def test_fetch_data_for_multiple_symbols(data_fetch_utils):
 
     # Mock Alpaca data
     mock_alpaca_df = pd.DataFrame({
-        'date': [pd.Timestamp('2023-01-03')],
+        'timestamp': [pd.Timestamp('2023-01-03')],
         'open': [130.0],
         'high': [132.0],
         'low': [129.0],
         'close': [131.0],
-        'volume': [1000000],
+        'trade_count': [1000000],
         'symbol': ['AAPL']
-    }).set_index('date')
+    })
 
     # Mock Alpha Vantage data
     mock_alpha_vantage_df = pd.DataFrame([
@@ -206,25 +220,33 @@ async def test_fetch_data_for_multiple_symbols(data_fetch_utils):
                     }
                 }
             }, status=200)
-
+    
         # Mock Alpaca API responses
-        for symbol in symbols:
-            with patch.object(data_fetch_utils.alpaca_api, 'get_bars', return_value=MagicMock(df=mock_alpaca_df)):
-                pass  # Already mocked above
+        with patch.object(data_fetch_utils.alpaca_api, 'get_bars', return_value=MagicMock(df=mock_alpaca_df)):
+            result = await data_fetch_utils.fetch_data_for_multiple_symbols(
+                symbols,
+                data_sources,
+                start_date,
+                end_date,
+                interval
+            )
+    
+    # Assertions for AAPL
+    assert 'AAPL' in result
+    assert 'Alpaca' in result['AAPL']
+    assert 'Alpha Vantage' in result['AAPL']
+    pd.testing.assert_frame_equal(
+        result['AAPL']['Alpaca'],
+        mock_alpaca_df.rename(columns={'timestamp': 'date', 'trade_count': 'volume'}).set_index('date')
+    )
+    pd.testing.assert_frame_equal(result['AAPL']['Alpha Vantage'], mock_alpha_vantage_df)
 
-        result = await data_fetch_utils.fetch_data_for_multiple_symbols(
-            symbols,
-            data_sources,
-            start_date,
-            end_date,
-            interval
-        )
-
-        assert 'AAPL' in result
-        assert 'Alpaca' in result['AAPL']
-        assert 'Alpha Vantage' in result['AAPL']
-        pd.testing.assert_frame_equal(result['AAPL']['Alpaca'], mock_alpaca_df)
-        pd.testing.assert_frame_equal(result['AAPL']['Alpha Vantage'], mock_alpha_vantage_df)
-        
-        # Similarly, you can add assertions for 'GOOGL'
-
+    # Assertions for GOOGL
+    assert 'GOOGL' in result
+    assert 'Alpaca' in result['GOOGL']
+    assert 'Alpha Vantage' in result['GOOGL']
+    pd.testing.assert_frame_equal(
+        result['GOOGL']['Alpaca'],
+        mock_alpaca_df.rename(columns={'timestamp': 'date', 'trade_count': 'volume'}).set_index('date')
+    )
+    pd.testing.assert_frame_equal(result['GOOGL']['Alpha Vantage'], mock_alpha_vantage_df)
