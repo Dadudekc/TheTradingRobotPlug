@@ -283,3 +283,40 @@ async def test_fetch_alpaca_data_async_failure(data_fetch_utils_fixture):
     # Ensure result is a DataFrame even on failure
     assert isinstance(result, pd.DataFrame)
     assert result.empty
+
+@pytest.mark.asyncio
+async def test_fetch_data_for_multiple_symbols_invalid_symbol(data_fetch_utils_fixture):
+    symbols = ['INVALID']
+    data_sources = ["Alpha Vantage"]
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    # Create an empty DataFrame for invalid symbol
+    mock_alpha_vantage_df_invalid = pd.DataFrame()
+
+    with aioresponses() as mocked:
+        # No valid results; let's assume the response is empty
+        url_pattern = re.compile(
+            rf"https://(?:www\.)?alphavantage\.co/query\?(?=.*function=TIME_SERIES_DAILY)(?=.*symbol=INVALID)(?=.*apikey=test_alphavantage_key).*"
+        )
+        mocked.get(
+            url_pattern,
+            payload={"Time Series (Daily)": {}},  # Empty time series
+            status=200
+        )
+
+        result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+            symbols,
+            data_sources,
+            start_date,
+            end_date,
+            interval
+        )
+
+    # Assertions
+    assert 'INVALID' in result, "Symbol 'INVALID' should still appear in the result."
+    assert 'Alpha Vantage' in result['INVALID'], "'Alpha Vantage' data source not found in the result."
+    # The returned DataFrame should be empty since no data
+    returned_df = result['INVALID']['Alpha Vantage']
+    assert returned_df.empty, "Expected an empty DataFrame for an invalid symbol."
