@@ -320,3 +320,95 @@ async def test_fetch_data_for_multiple_symbols_invalid_symbol(data_fetch_utils_f
     # The returned DataFrame should be empty since no data
     returned_df = result['INVALID']['Alpha Vantage']
     assert returned_df.empty, "Expected an empty DataFrame for an invalid symbol."
+
+@pytest.mark.asyncio
+async def test_fetch_data_for_multiple_symbols_empty_symbols(data_fetch_utils_fixture):
+    # Empty symbols list
+    symbols = []
+    data_sources = ["Alpha Vantage"]
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    # Call the function with empty symbols
+    result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+        symbols,
+        data_sources,
+        start_date,
+        end_date,
+        interval
+    )
+
+    # Assertions
+    assert isinstance(result, dict), "Result should be a dictionary."
+    assert not result, "Result should be an empty dictionary when no symbols are provided."
+
+@pytest.mark.asyncio
+async def test_fetch_data_for_mixed_symbols(data_fetch_utils_fixture):
+    symbols = ['AAPL', 'INVALID']
+    data_sources = ["Alpha Vantage"]
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    # Mock Alpha Vantage data for 'AAPL'
+    mock_alpha_vantage_df_aapl = pd.DataFrame([{
+        'open': 130.0,
+        'high': 132.0,
+        'low': 129.0,
+        'close': 131.0,
+        'volume': 1000000
+    }], index=pd.to_datetime(['2023-01-03'])).rename_axis('date')
+
+    with aioresponses() as mocked:
+        # Mock data for valid symbol
+        url_pattern_aapl = re.compile(
+            rf"https://(?:www\.)?alphavantage\.co/query\?(?=.*function=TIME_SERIES_DAILY)(?=.*symbol=AAPL)(?=.*apikey=test_alphavantage_key).*"
+        )
+        mocked.get(
+            url_pattern_aapl,
+            payload={
+                "Time Series (Daily)": {
+                    "2023-01-03": {
+                        "1. open": "130.0",
+                        "2. high": "132.0",
+                        "3. low": "129.0",
+                        "4. close": "131.0",
+                        "5. volume": "1000000"
+                    }
+                }
+            },
+            status=200
+        )
+
+        # Mock data for invalid symbol
+        url_pattern_invalid = re.compile(
+            rf"https://(?:www\.)?alphavantage\.co/query\?(?=.*function=TIME_SERIES_DAILY)(?=.*symbol=INVALID)(?=.*apikey=test_alphavantage_key).*"
+        )
+        mocked.get(
+            url_pattern_invalid,
+            payload={"Time Series (Daily)": {}},  # Empty response
+            status=200
+        )
+
+        result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+            symbols,
+            data_sources,
+            start_date,
+            end_date,
+            interval
+        )
+
+    # Normalize the index types to ensure compatibility
+    result['AAPL']['Alpha Vantage'].index = pd.to_datetime(result['AAPL']['Alpha Vantage'].index)
+    mock_alpha_vantage_df_aapl.index = pd.to_datetime(mock_alpha_vantage_df_aapl.index)
+
+    # Assertions for AAPL
+    assert 'AAPL' in result, "AAPL data should be in the result."
+    assert 'Alpha Vantage' in result['AAPL'], "Alpha Vantage data source should be present for AAPL."
+    pd.testing.assert_frame_equal(result['AAPL']['Alpha Vantage'], mock_alpha_vantage_df_aapl)
+
+    # Assertions for INVALID
+    assert 'INVALID' in result, "INVALID symbol should still appear in the result."
+    assert 'Alpha Vantage' in result['INVALID'], "Alpha Vantage data source should be present for INVALID."
+    assert result['INVALID']['Alpha Vantage'].empty, "Expected an empty DataFrame for INVALID symbol."
