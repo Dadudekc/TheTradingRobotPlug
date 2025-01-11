@@ -1731,3 +1731,72 @@ async def test_fetch_polygon_data_malformed_response(data_fetch_utils_fixture):
 
     assert isinstance(result, pd.DataFrame), "Expected a DataFrame even with malformed data."
     assert result.empty, "Expected an empty DataFrame when response is malformed."
+
+
+
+def test_get_project_root_failure(monkeypatch):
+    from Scripts.Utilities.data_fetch_utils import get_project_root
+
+    # Simulate no .env file found
+    monkeypatch.setattr('Scripts.Utilities.data_fetch_utils.Path.exists', lambda _: False)
+
+    with pytest.raises(RuntimeError):
+        get_project_root()
+
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_unexpected_status(data_fetch_utils_fixture):
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+
+    with aioresponses() as mocked:
+        # Simulate unexpected status code 403
+        mocked.get(url, status=403, repeat=True)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    assert result is None, "Expected None for unexpected status codes."
+
+
+@pytest.mark.asyncio
+async def test_fetch_alpaca_data_async_uninitialized_client(data_fetch_utils_fixture):
+    symbol = 'AAPL'
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1Day'
+
+    # Set Alpaca client to None
+    data_fetch_utils_fixture.alpaca_api = None
+
+    result = await data_fetch_utils_fixture.fetch_alpaca_data_async(symbol, start_date, end_date, interval)
+
+    assert result.empty, "Expected an empty DataFrame when Alpaca client is uninitialized."
+
+
+
+@pytest.mark.asyncio
+async def test_fetch_news_data_async_unexpected_fields(data_fetch_utils_fixture):
+    symbol = 'AAPL'
+    mock_response = {
+        'status': 'ok',
+        'totalResults': 1,
+        'articles': [
+            {
+                'publishedAt': '2023-04-14T12:34:56Z',
+                'title': 'Apple Releases New Product',
+                'unexpected_field': 'unexpected_value'
+            }
+        ]
+    }
+
+    with patch('requests.get') as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = mock_response
+        mock_get.return_value = mock_resp
+
+        result = await data_fetch_utils_fixture.fetch_news_data_async(symbol, page_size=1)
+
+    assert 'unexpected_field' not in result.columns, "Unexpected field should not appear in the DataFrame."
