@@ -23,12 +23,6 @@ except ImportError:
     from Scripts.Utilities.config_manager import setup_logging  # When the script is imported as a module
 
 
-
-
-
-
-
-
 # -------------------------------------------------------------------
 # Locate and load environment
 # -------------------------------------------------------------------
@@ -361,10 +355,22 @@ class DataFetchUtils:
         data_sources: List[str] = ["Alpaca", "Alpha Vantage", "Polygon", "Yahoo Finance", "Finnhub", "NewsAPI"],
         start_date: str = "2023-01-01",
         end_date: Optional[str] = None,
-        interval: str = "1d"
+        interval: str = "1d",
+        max_concurrent_tasks: int = 5
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetches data for multiple stock symbols from various data sources.
+
+        Args:
+            symbols (List[str]): List of stock symbols to fetch data for.
+            data_sources (List[str]): List of data sources to fetch data from.
+            start_date (str): Start date for data fetching (YYYY-MM-DD).
+            end_date (Optional[str]): End date for data fetching (YYYY-MM-DD). Defaults to today.
+            interval (str): Data interval (e.g., '1d', '1m').
+            max_concurrent_tasks (int): Maximum number of concurrent tasks.
+
+        Returns:
+            Dict[str, Dict[str, Any]]: Nested dictionary with data for each symbol and data source.
         """
         end_date = end_date or datetime.now().strftime('%Y-%m-%d')
         start_date = pd.to_datetime(start_date).strftime('%Y-%m-%d')
@@ -372,15 +378,34 @@ class DataFetchUtils:
         all_data = {}
         alpaca_interval = "1Day" if interval == "1d" else interval
 
+        # Validate inputs
+        if not symbols:
+            self.logger.error("No symbols provided for data fetching.")
+            raise ValueError("Symbols list cannot be empty.")
+        if not set(data_sources).issubset({"Alpaca", "Alpha Vantage", "Polygon", "Yahoo Finance", "Finnhub", "NewsAPI"}):
+            self.logger.error(f"Unsupported data sources provided: {data_sources}")
+            raise ValueError("Unsupported data source(s).")
+
+        # Semaphore to limit concurrency
+        semaphore = asyncio.Semaphore(max_concurrent_tasks)
+
+        async def fetch_symbol_data(symbol):
+            async with semaphore:
+                try:
+                    return await self._fetch_data_for_symbol(symbol, data_sources, start_date, end_date, alpaca_interval, session)
+                except Exception as e:
+                    self.logger.error(f"Error fetching data for {symbol}: {e}")
+                    return {source: None for source in data_sources}
+
         async with aiohttp.ClientSession() as session:
-            tasks = []
-            for symbol in symbols:
-                tasks.append(self._fetch_data_for_symbol(symbol, data_sources, start_date, end_date, alpaca_interval, session))
+            tasks = [fetch_symbol_data(symbol) for symbol in symbols]
             results = await asyncio.gather(*tasks)
-            for symbol, symbol_data in zip(symbols, results):
-                all_data[symbol] = symbol_data
+
+        for symbol, symbol_data in zip(symbols, results):
+            all_data[symbol] = symbol_data
 
         return all_data
+
 
     async def _fetch_data_for_symbol(self, symbol: str, data_sources: List[str], start_date: str, end_date: str, interval: str, session: ClientSession) -> Dict[str, Any]:
         """

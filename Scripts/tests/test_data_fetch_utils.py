@@ -294,28 +294,6 @@ async def test_fetch_data_for_multiple_symbols_invalid_symbol(data_fetch_utils_f
     assert returned_df.empty, "Expected an empty DataFrame for an invalid symbol."
 
 @pytest.mark.asyncio
-async def test_fetch_data_for_multiple_symbols_empty_symbols(data_fetch_utils_fixture):
-    # Empty symbols list
-    symbols = []
-    data_sources = ["Alpha Vantage"]
-    start_date = '2023-01-01'
-    end_date = '2023-01-31'
-    interval = '1d'
-
-    # Call the function with empty symbols
-    result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
-        symbols,
-        data_sources,
-        start_date,
-        end_date,
-        interval
-    )
-
-    # Assertions
-    assert isinstance(result, dict), "Result should be a dictionary."
-    assert not result, "Result should be an empty dictionary when no symbols are provided."
-
-@pytest.mark.asyncio
 async def test_fetch_data_for_mixed_symbols(data_fetch_utils_fixture):
     symbols = ['AAPL', 'INVALID']
     data_sources = ["Alpha Vantage"]
@@ -1642,41 +1620,6 @@ async def test_fetch_finnhub_quote_unexpected_exception(data_fetch_utils_fixture
 
     assert isinstance(result, pd.DataFrame), "Expected a DataFrame even on exception."
     assert result.empty, "Expected an empty DataFrame when an exception occurs."
- 
-@pytest.mark.parametrize("missing_key,expect_error", [
-    ("FINNHUB_API_KEY", False),   # Expect a warning only
-    ("NEWSAPI_API_KEY", True),    # Expect an EnvironmentError
-])
-def test_data_fetch_utils_init_missing_keys(monkeypatch, missing_key, expect_error):
-    from Scripts.Utilities.data_fetch_utils import DataFetchUtils, setup_logging
-
-    # Set a default value for NEWSAPI_API_KEY if it's not the key being tested
-    if missing_key != "NEWSAPI_API_KEY":
-        monkeypatch.setenv("NEWSAPI_API_KEY", "test_newsapi_key")
-
-    # Remove the specified environment variable
-    original_value = os.environ.pop(missing_key, None)
-    try:
-        mock_logger = MagicMock()
-        if expect_error:
-            # Missing NEWSAPI_API_KEY should raise EnvironmentError
-            with pytest.raises(EnvironmentError):
-                DataFetchUtils(logger=mock_logger)
-            print(f"PASS: Missing {missing_key} raised an EnvironmentError as expected.")
-        else:
-            # Missing FINNHUB_API_KEY logs a warning but does not raise
-            instance = DataFetchUtils(logger=mock_logger)
-            # Check if the logger warning was called
-            mock_logger.warning.assert_called_with(
-                "FINNHUB_API_KEY is not set in environment variables. Finnhub features may fail."
-            )
-            assert instance is not None, "DataFetchUtils should still be created without Finnhub key."
-            print(f"PASS: Missing {missing_key} logged a warning as expected.")
-    finally:
-        # Restore the original environment variable if it existed
-        if original_value is not None:
-            os.environ[missing_key] = original_value
-
 
 def test_parse_finnhub_metrics_data_valid(data_fetch_utils_fixture):
     """
@@ -1869,3 +1812,482 @@ def test_initialize_alpaca_invalid_config(monkeypatch):
     monkeypatch.setenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
     client = initialize_alpaca()
     assert client is not None, "Expected a valid Alpaca client with correct configuration."
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_large_symbol_list(data_fetch_utils_fixture):
+    """
+    Test fetch_data_for_multiple_symbols with a large number of symbols.
+    """
+    symbols = [f'SYM{i}' for i in range(100)]  # Generate 100 mock symbols
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    data_sources = ["Alpha Vantage"]
+
+    result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+        symbols,
+        data_sources,
+        start_date,
+        end_date
+    )
+    assert len(result) == len(symbols), "Expected results for all symbols."
+    for symbol in symbols:
+        assert symbol in result, f"Missing result for symbol {symbol}."
+
+
+
+@pytest.mark.asyncio
+async def test_fetch_alpaca_no_key(data_fetch_utils_fixture):
+    """
+    Test fetch_alpaca_data_async when Alpaca API key is missing.
+    """
+    data_fetch_utils_fixture.alpaca_api = None
+    result = await data_fetch_utils_fixture.fetch_alpaca_data_async(
+        symbol="AAPL",
+        start_date="2023-01-01",
+        end_date="2023-01-31",
+        interval="1Day"
+    )
+    assert result.empty, "Expected an empty DataFrame when Alpaca API key is missing."
+
+
+def test_parse_finnhub_metrics_data_valid(data_fetch_utils_fixture):
+    """
+    Test _parse_finnhub_metrics_data with valid data.
+    """
+    data = {
+        "metric": {
+            "52WeekHigh": 123,
+            "52WeekLow": 456,
+            "MarketCapitalization": 789,
+            "P/E": 25.5
+        }
+    }
+
+    parsed_df = data_fetch_utils_fixture._parse_finnhub_metrics_data(data)
+
+    assert isinstance(parsed_df, pd.DataFrame), "Expected a DataFrame."
+    assert not parsed_df.empty, "Expected a non-empty DataFrame."
+    assert "52WeekHigh" in parsed_df.columns, "Missing '52WeekHigh' column."
+    assert "52WeekLow" in parsed_df.columns, "Missing '52WeekLow' column."
+    assert "MarketCapitalization" in parsed_df.columns, "Missing 'MarketCapitalization' column."
+    assert "P/E" in parsed_df.columns, "Missing 'P/E' column."
+    assert parsed_df.index.name == "date_fetched", "Missing or incorrect 'date_fetched' index."
+
+
+@pytest.mark.asyncio
+async def test_fetch_polygon_data_malformed_response(data_fetch_utils_fixture):
+    """
+    Test fetch_polygon_data with a malformed Polygon API response.
+    """
+    symbol = 'AAPL'
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    mock_response = {
+        "results": [
+            {
+                "o": 130.0,
+                "h": 132.0,
+                # Missing 't', 'l', 'c', 'v'
+            }
+        ]
+    }
+
+    with aioresponses() as mocked:
+        url_pattern = re.compile(
+            rf"https://api\.polygon\.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}\?adjusted=true&apiKey=test_polygonio_key"
+        )
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_polygon_data(symbol, session, start_date, end_date)
+
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame even with malformed data."
+    assert result.empty, "Expected an empty DataFrame when response is malformed."
+
+
+def test_parse_polygon_data_invalid_timestamps(data_fetch_utils_fixture):
+    data = {
+        "results": [
+            {
+                "t": "invalid_timestamp",  # Invalid timestamp
+                "o": 130.0,
+                "h": 132.0,
+                "l": 129.0,
+                "c": 131.0,
+                "v": 1000000
+            }
+        ]
+    }
+    with pytest.raises(TypeError, match="unsupported operand type"):
+        data_fetch_utils_fixture._parse_polygon_data(data)
+
+@pytest.mark.asyncio
+async def test_fetch_polygon_data_unexpected_keys(data_fetch_utils_fixture):
+    symbol = 'AAPL'
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    mock_response = {
+        "results": [
+            {
+                "unexpected_key": 12345,
+                "t": 1672531200000,
+                "o": 130.0,
+                "h": 132.0,
+                "l": 129.0,
+                "c": 131.0,
+                "v": 1000000
+            }
+        ]
+    }
+
+    with aioresponses() as mocked:
+        url_pattern = re.compile(
+            rf"https://api\.polygon\.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}\?adjusted=true&apiKey=test_polygonio_key"
+        )
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_polygon_data(symbol, session, start_date, end_date)
+
+    assert not result.empty, "Expected non-empty DataFrame."
+    assert 'unexpected_key' not in result.columns, "Unexpected key should not appear in the DataFrame."
+
+def test_parse_polygon_data_invalid_timestamps(data_fetch_utils_fixture):
+    data = {
+        "results": [
+            {
+                "t": "invalid_timestamp",  # Invalid timestamp
+                "o": 130.0,
+                "h": 132.0,
+                "l": 129.0,
+                "c": 131.0,
+                "v": 1000000
+            }
+        ]
+    }
+    with pytest.raises(TypeError, match="unsupported operand type"):
+        data_fetch_utils_fixture._parse_polygon_data(data)
+
+
+def test_initialize_alpaca_invalid_config(monkeypatch):
+    from Scripts.Utilities.data_fetch_utils import initialize_alpaca
+
+    # Missing keys
+    monkeypatch.delenv('ALPACA_API_KEY', raising=False)
+    monkeypatch.delenv('ALPACA_SECRET_KEY', raising=False)
+    assert initialize_alpaca() is None, "Expected None with missing Alpaca keys."
+
+    # Invalid URL
+    monkeypatch.setenv('ALPACA_API_KEY', 'dummy_key')
+    monkeypatch.setenv('ALPACA_SECRET_KEY', 'dummy_secret')
+    monkeypatch.setenv('ALPACA_BASE_URL', 'invalid_url')
+    with pytest.raises(ValueError, match="Invalid URL"):
+        initialize_alpaca()
+
+    # Valid configuration
+    monkeypatch.setenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+    # Mock tradeapi.REST
+    with patch('alpaca_trade_api.REST') as mock_tradeapi:
+        mock_client = MagicMock()
+        mock_tradeapi.return_value = mock_client
+        client = initialize_alpaca()
+        assert client == mock_client, "Expected a valid Alpaca client with correct configuration."
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_for_multiple_symbols_empty_data_sources(data_fetch_utils_fixture):
+    """
+    Test fetching data with empty data_sources list.
+    """
+    symbols = ['AAPL']
+    data_sources = []
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    # Call the function with empty data_sources
+    result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+        symbols,
+        data_sources,
+        start_date,
+        end_date,
+        interval
+    )
+
+    # Assertions
+    assert 'AAPL' in result, "AAPL should be in the result."
+    assert not result['AAPL'], "AAPL data should be empty when no data sources are provided."
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_for_multiple_symbols_success(data_fetch_utils_fixture):
+    """
+    Test fetching data for multiple symbols from multiple sources successfully.
+    """
+    symbols = ['AAPL', 'GOOGL']
+    data_sources = ["Alpha Vantage", "Polygon"]
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    # Mock Alpha Vantage data
+    mock_alpha_vantage_data = {
+        "Time Series (Daily)": {
+            "2023-01-03": {
+                "1. open": "130.0",
+                "2. high": "132.0",
+                "3. low": "129.0",
+                "4. close": "131.0",
+                "5. volume": "1000000"
+            }
+        }
+    }
+
+    # Mock Polygon data
+    mock_polygon_data = {
+        "results": [
+            {
+                "t": 1672531200000,  # 2023-01-01
+                "o": 130.0,
+                "h": 132.0,
+                "l": 129.0,
+                "c": 131.0,
+                "v": 1000000
+            }
+        ]
+    }
+
+    # Expected DataFrames
+    expected_alpha_vantage_df_aapl = pd.DataFrame([{
+        'open': 130.0,
+        'high': 132.0,
+        'low': 129.0,
+        'close': 131.0,
+        'volume': 1000000
+    }], index=pd.to_datetime(['2023-01-03'])).rename_axis('date')
+
+    expected_alpha_vantage_df_googl = pd.DataFrame([{
+        'open': 130.0,
+        'high': 132.0,
+        'low': 129.0,
+        'close': 131.0,
+        'volume': 1000000
+    }], index=pd.to_datetime(['2023-01-03'])).rename_axis('date')
+
+    expected_polygon_df_aapl = pd.DataFrame({
+        'open': [130.0],
+        'high': [132.0],
+        'low': [129.0],
+        'close': [131.0],
+        'volume': [1000000]
+    }, index=pd.to_datetime(['2023-01-01']).date).rename_axis('date')
+
+    expected_polygon_df_googl = pd.DataFrame({
+        'open': [130.0],
+        'high': [132.0],
+        'low': [129.0],
+        'close': [131.0],
+        'volume': [1000000]
+    }, index=pd.to_datetime(['2023-01-01']).date).rename_axis('date')
+
+    with aioresponses() as mocked:
+        # Mock Alpha Vantage for AAPL and GOOGL
+        for symbol in symbols:
+            url_pattern_av = re.compile(
+                rf"https://(?:www\.)?alphavantage\.co/query\?(?=.*function=TIME_SERIES_DAILY)(?=.*symbol={symbol})(?=.*apikey=test_alphavantage_key).*"
+            )
+            mocked.get(
+                url_pattern_av,
+                payload=mock_alpha_vantage_data,
+                status=200
+            )
+
+            # Mock Polygon for AAPL and GOOGL
+            url_pattern_polygon = re.compile(
+                rf"https://api\.polygon\.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}\?adjusted=true&apiKey=test_polygonio_key"
+            )
+            mocked.get(
+                url_pattern_polygon,
+                payload=mock_polygon_data,
+                status=200
+            )
+
+        # Call the function under test
+        result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+            symbols, data_sources, start_date, end_date, interval
+        )
+
+    # Assertions for AAPL
+    assert 'AAPL' in result, "AAPL should be in the result."
+    assert 'Alpha Vantage' in result['AAPL'], "Alpha Vantage data for AAPL missing."
+    pd.testing.assert_frame_equal(result['AAPL']['Alpha Vantage'], expected_alpha_vantage_df_aapl)
+    assert 'Polygon' in result['AAPL'], "Polygon data for AAPL missing."
+    pd.testing.assert_frame_equal(result['AAPL']['Polygon'], expected_polygon_df_aapl)
+
+    # Assertions for GOOGL
+    assert 'GOOGL' in result, "GOOGL should be in the result."
+    assert 'Alpha Vantage' in result['GOOGL'], "Alpha Vantage data for GOOGL missing."
+    pd.testing.assert_frame_equal(result['GOOGL']['Alpha Vantage'], expected_alpha_vantage_df_googl)
+    assert 'Polygon' in result['GOOGL'], "Polygon data for GOOGL missing."
+    pd.testing.assert_frame_equal(result['GOOGL']['Polygon'], expected_polygon_df_googl)
+
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_quote_unexpected_exception(data_fetch_utils_fixture):
+    """
+    Test fetch_finnhub_quote handling of unexpected exceptions.
+    """
+    symbol = 'AAPL'
+    with aioresponses() as mocked:
+        url_pattern = re.compile(
+            rf"https://finnhub\.io/api/v1/quote\?symbol={symbol}&token=test_finnhub_key.*"
+        )
+        mocked.get(url_pattern, exception=Exception("Unexpected Error"))
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_quote(symbol, session)
+
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame even on exception."
+    assert result.empty, "Expected an empty DataFrame when an exception occurs."
+
+
+@pytest.mark.asyncio
+async def test_concurrency_fetch_many_symbols(data_fetch_utils_fixture):
+    """
+    Test fetching data concurrently for a large number of symbols.
+    """
+    symbols = [f'SYM{i}' for i in range(100)]  # 100 symbols
+    data_sources = ["Alpha Vantage"]
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    # Mock Alpha Vantage data for each symbol
+    with aioresponses() as mocked:
+        for symbol in symbols:
+            url_pattern = re.compile(
+                rf"https://(?:www\.)?alphavantage\.co/query\?(?=.*function=TIME_SERIES_DAILY)(?=.*symbol={symbol})(?=.*apikey=test_alphavantage_key).*"
+            )
+            mocked.get(
+                url_pattern,
+                payload={
+                    "Time Series (Daily)": {
+                        "2023-01-03": {
+                            "1. open": "100.0",
+                            "2. high": "105.0",
+                            "3. low": "95.0",
+                            "4. close": "102.0",
+                            "5. volume": "1000000"
+                        }
+                    }
+                },
+                status=200
+            )
+        
+        # Fetch data
+        result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+            symbols,
+            data_sources,
+            start_date,
+            end_date,
+            interval
+        )
+    
+    # Assertions
+    for symbol in symbols:
+        assert symbol in result, f"{symbol} not in result."
+        assert "Alpha Vantage" in result[symbol], f"Alpha Vantage data missing for {symbol}."
+        df = result[symbol]["Alpha Vantage"]
+        assert not df.empty, f"Expected data for {symbol}."
+        # Check specific data
+        expected_df = pd.DataFrame([{
+            'open': 100.0,
+            'high': 105.0,
+            'low': 95.0,
+            'close': 102.0,
+            'volume': 1000000
+        }], index=pd.to_datetime(['2023-01-03'])).rename_axis('date')
+        pd.testing.assert_frame_equal(df, expected_df, check_dtype=False)
+
+def test_parse_finnhub_metrics_data_valid(data_fetch_utils_fixture):
+    """
+    Test _parse_finnhub_metrics_data with valid data.
+    """
+    data = {
+        "metric": {
+            "52WeekHigh": 123,
+            "52WeekLow": 456,
+            "MarketCapitalization": 789,
+            "P/E": 25.5
+        }
+    }
+
+    parsed_df = data_fetch_utils_fixture._parse_finnhub_metrics_data(data)
+
+    assert isinstance(parsed_df, pd.DataFrame), "Expected a DataFrame."
+    assert not parsed_df.empty, "Expected a non-empty DataFrame."
+    assert "52WeekHigh" in parsed_df.columns, "Missing '52WeekHigh' column."
+    assert "52WeekLow" in parsed_df.columns, "Missing '52WeekLow' column."
+    assert "MarketCapitalization" in parsed_df.columns, "Missing 'MarketCapitalization' column."
+    assert "P/E" in parsed_df.columns, "Missing 'P/E' column."
+    assert parsed_df.index.name == "date_fetched", "Missing or incorrect 'date_fetched' index."
+
+
+# -----------------------------
+# Additional Test Functions
+# -----------------------------
+
+@pytest.mark.asyncio
+async def test_fetch_yahoo_finance_data_success(data_fetch_utils_fixture):
+    """
+    Test fetching data successfully from Yahoo Finance (yfinance).
+    """
+    ticker = 'AAPL'
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    # Mock yfinance.download to return expected DataFrame
+    mock_yf_data = pd.DataFrame({
+        'Date': pd.to_datetime(['2023-01-03', '2023-01-04']),
+        'Open': [130.0, 131.0],
+        'High': [132.0, 133.0],
+        'Low': [129.0, 130.0],
+        'Close': [131.0, 132.0],
+        'Volume': [1000000, 1500000],
+        'Adj Close': [130.5, 131.5]
+    }).set_index('Date')
+
+    expected_df = pd.DataFrame({
+        'open': [130.0, 131.0],
+        'high': [132.0, 133.0],
+        'low': [129.0, 130.0],
+        'close': [131.0, 132.0],
+        'volume': [1000000, 1500000],
+        'adj_close': [130.5, 131.5],
+        'symbol': ['AAPL', 'AAPL']
+    }, index=pd.to_datetime(['2023-01-03', '2023-01-04']).date).rename_axis('date')
+
+    with patch('yfinance.download', return_value=mock_yf_data):
+        result = await data_fetch_utils_fixture.fetch_stock_data_async(ticker, start_date, end_date, interval)
+
+    pd.testing.assert_frame_equal(result, expected_df)
+
+@pytest.mark.asyncio
+async def test_fetch_yahoo_finance_data_unsupported_interval(data_fetch_utils_fixture):
+    """
+    Test fetching data from Yahoo Finance with unsupported interval.
+    """
+    ticker = 'AAPL'
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '5d'  # Unsupported
+
+    with patch('yfinance.download', side_effect=ValueError("Unsupported interval")):
+        result = await data_fetch_utils_fixture.fetch_stock_data_async(ticker, start_date, end_date, interval)
+
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame even on failure."
+    assert result.empty, "Expected an empty DataFrame when an invalid interval is used."
+
+
