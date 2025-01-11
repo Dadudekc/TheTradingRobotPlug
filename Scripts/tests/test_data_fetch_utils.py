@@ -1269,35 +1269,6 @@ async def test_parse_alphavantage_data_valid(data_fetch_utils_fixture):
     pd.testing.assert_frame_equal(parsed_df, expected_df)
 
 
-@pytest.mark.parametrize("missing_key,expect_error", [
-    ("FINNHUB_API_KEY", False),   # Expect a warning only
-    ("NEWSAPI_API_KEY", True),    # Expect an EnvironmentError
-])
-def test_data_fetch_utils_init_missing_keys(monkeypatch, missing_key, expect_error):
-    from Scripts.Utilities.data_fetch_utils import DataFetchUtils, setup_logging
-    
-    # Patch environment variable
-    original_value = os.environ.pop(missing_key, None)
-    try:
-        mock_logger = MagicMock()
-        if expect_error:
-            # Missing NewsAPI key should raise EnvironmentError
-            with pytest.raises(EnvironmentError):
-                DataFetchUtils(logger=mock_logger)
-        else:
-            # Missing Finnhub key logs a warning but does not raise
-            instance = DataFetchUtils(logger=mock_logger)
-            # Check if the logger warning was called
-            mock_logger.warning.assert_called_with(
-                "FINNHUB_API_KEY is not set in environment variables. Finnhub features may fail."
-            )
-            assert instance is not None, "DataFetchUtils should still be created without Finnhub key."
-    finally:
-        # Restore original env var if it existed
-        if original_value is not None:
-            os.environ[missing_key] = original_value
-
-
 @pytest.mark.asyncio
 async def test_fetch_news_data_async_failure(data_fetch_utils_fixture):
     symbol = 'AAPL'
@@ -1363,4 +1334,400 @@ async def test_fetch_polygon_data_success(data_fetch_utils_fixture):
 
     pd.testing.assert_frame_equal(result, expected_df)
 
+@pytest.mark.asyncio
+async def test_logging_setup(data_fetch_utils_fixture):
+    """
+    Test that logging is properly set up and logs messages as expected.
+    """
+    with patch.object(data_fetch_utils_fixture.logger, 'info') as mock_info:
+        data_fetch_utils_fixture.logger.info("Test log message.")
+        mock_info.assert_called_with("Test log message.")
 
+@pytest.mark.asyncio
+async def test_fetch_with_retries_mixed_failures(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries where initial attempts fail and a subsequent attempt succeeds.
+    """
+    url = "https://example.com/api/mixed"
+    headers = {}
+    retries = 3
+    mock_response = {"data": "eventual success"}
+
+    with aioresponses() as mocked:
+        # First two attempts fail with 500, third attempt succeeds
+        mocked.get(url, status=500)
+        mocked.get(url, status=500)
+        mocked.get(url, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    assert result == mock_response, "Expected successful response on the third attempt."
+
+@pytest.mark.asyncio
+async def test_fetch_stock_data_async_invalid_interval(data_fetch_utils_fixture):
+    """
+    Test fetch_stock_data_async with an invalid interval.
+    """
+    ticker = 'AAPL'
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '5d'  # Assuming '5d' is unsupported
+
+    with patch('yfinance.download', side_effect=ValueError("Unsupported interval")):
+        result = await data_fetch_utils_fixture.fetch_stock_data_async(ticker, start_date, end_date, interval)
+
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame even on failure."
+    assert result.empty, "Expected an empty DataFrame when an invalid interval is used."
+
+@pytest.mark.asyncio
+async def test_fetch_alpaca_data_async_invalid_date_range(data_fetch_utils_fixture):
+    """
+    Test fetch_alpaca_data_async with an invalid date range.
+    """
+    symbol = 'AAPL'
+    start_date = '2023-02-30'  # Invalid date
+    end_date = '2023-01-31'    # End date before start date
+    interval = '1Day'
+
+    with patch.object(data_fetch_utils_fixture.alpaca_api, 'get_bars', side_effect=ValueError("Invalid date range")):
+        result = await data_fetch_utils_fixture.fetch_alpaca_data_async(symbol, start_date, end_date, interval)
+
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame even on failure."
+    assert result.empty, "Expected an empty DataFrame for invalid date ranges."
+
+@pytest.mark.asyncio
+async def test_fetch_news_data_async_missing_fields(data_fetch_utils_fixture):
+    """
+    Test fetch_news_data_async with articles missing some fields.
+    """
+    symbol = 'AAPL'
+    mock_response = {
+        'status': 'ok',
+        'totalResults': 1,
+        'articles': [
+            {
+                'publishedAt': '2023-04-14T12:34:56Z',
+                'title': 'Apple Releases New Product',
+                # Missing 'description', 'source', 'url'
+            }
+        ]
+    }
+
+    with patch('requests.get') as mock_get, patch('Scripts.Utilities.data_fetch_utils.TextBlob') as mock_textblob:
+        # Mocking the HTTP request
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = mock_response
+        mock_get.return_value = mock_resp
+
+        # Mocking sentiment analysis to handle missing description
+        mock_blob_instance = MagicMock()
+        mock_blob_instance.sentiment.polarity = 0.0
+        mock_textblob.return_value = mock_blob_instance
+
+        result = await data_fetch_utils_fixture.fetch_news_data_async(symbol, page_size=1)
+
+    expected_df = pd.DataFrame([
+        {
+            'date': pd.to_datetime('2023-04-14').date(),
+            'headline': 'Apple Releases New Product',
+            'content': '',  # Default to empty string
+            'symbol': 'AAPL',
+            'source': '',    # Default to empty string
+            'url': '',       # Default to empty string
+            'sentiment': 0.0
+        }
+    ]).set_index('date')
+
+    pd.testing.assert_frame_equal(result, expected_df)
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_additional_fields(data_fetch_utils_fixture):
+    """
+    Test fetch_finnhub_metrics with additional unexpected fields in the metrics.
+    """
+    symbol = "AAPL"
+    mock_response = {
+        "metric": {
+            "52WeekHigh": 123,
+            "52WeekLow": 456,
+            "MarketCapitalization": 789,
+            "P/E": 25.5,
+            "ExtraMetric": 999  # Unexpected field
+        }
+    }
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    expected_df = pd.DataFrame([{
+        "52WeekHigh": 123,
+        "52WeekLow": 456,
+        "MarketCapitalization": 789,
+        "P/E": 25.5,
+        "date_fetched": pd.Timestamp.utcnow().floor("s")
+    }]).set_index("date_fetched")
+
+    # Normalize timezones to naive datetime64[ns]
+    result = result.reset_index()
+    expected_df = expected_df.reset_index()
+    result["date_fetched"] = pd.to_datetime(result["date_fetched"]).dt.tz_localize(None)
+    expected_df["date_fetched"] = pd.to_datetime(expected_df["date_fetched"]).dt.tz_localize(None)
+
+    pd.testing.assert_frame_equal(result, expected_df)
+
+@pytest.mark.asyncio
+async def test_fetch_data_for_multiple_symbols_mixed_symbols(data_fetch_utils_fixture):
+    symbols = ['AAPL', 'INVALID']
+    data_sources = ["Alpha Vantage", "Finnhub"]
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    # Mock Alpha Vantage for AAPL
+    mock_alpha_vantage_df_aapl = pd.DataFrame([
+        {
+            'open': 130.0,
+            'high': 132.0,
+            'low': 129.0,
+            'close': 131.0,
+            'volume': 1000000
+        }
+    ], index=pd.to_datetime(['2023-01-03'])).rename_axis('date')
+
+    # Mock Alpha Vantage response for INVALID symbol (empty)
+    mock_alpha_vantage_response_invalid = {
+        "Time Series (Daily)": {}
+    }
+
+    # Mock Finnhub metrics for AAPL
+    mock_finnhub_response_aapl = {
+        "metric": {
+            "52WeekHigh": 123,
+            "52WeekLow": 456,
+            "MarketCapitalization": 789,
+            "P/E": 25.5
+        }
+    }
+
+    # Mock Finnhub metrics for INVALID symbol (missing metric)
+    mock_finnhub_response_invalid = {}
+
+    with aioresponses() as mocked:
+        # Mock Alpha Vantage for AAPL
+        url_pattern_aapl = re.compile(
+            rf"https://(?:www\.)?alphavantage\.co/query\?(?=.*function=TIME_SERIES_DAILY)(?=.*symbol=AAPL)(?=.*apikey=test_alphavantage_key).*"
+        )
+        mocked.get(
+            url_pattern_aapl,
+            payload={
+                "Time Series (Daily)": {
+                    "2023-01-03": {
+                        "1. open": "130.0",
+                        "2. high": "132.0",
+                        "3. low": "129.0",
+                        "4. close": "131.0",
+                        "5. volume": "1000000"
+                    }
+                }
+            },
+            status=200
+        )
+
+        # Mock Alpha Vantage for INVALID
+        url_pattern_invalid_av = re.compile(
+            rf"https://(?:www\.)?alphavantage\.co/query\?(?=.*function=TIME_SERIES_DAILY)(?=.*symbol=INVALID)(?=.*apikey=test_alphavantage_key).*"
+        )
+        mocked.get(
+            url_pattern_invalid_av,
+            payload=mock_alpha_vantage_response_invalid,
+            status=200
+        )
+
+        # Mock Finnhub for AAPL
+        url_pattern_finnhub_aapl = re.compile(
+            rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol=AAPL)(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+        )
+        mocked.get(
+            url_pattern_finnhub_aapl,
+            payload=mock_finnhub_response_aapl,
+            status=200
+        )
+
+        # Mock Finnhub for INVALID
+        url_pattern_finnhub_invalid = re.compile(
+            rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol=INVALID)(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+        )
+        mocked.get(
+            url_pattern_finnhub_invalid,
+            payload=mock_finnhub_response_invalid,
+            status=200
+        )
+
+        result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+            symbols,
+            data_sources,
+            start_date,
+            end_date,
+            interval
+        )
+
+    # Assertions for AAPL
+    assert 'AAPL' in result, "AAPL should be in the result."
+    assert 'Alpha Vantage' in result['AAPL'], "Alpha Vantage data for AAPL missing."
+    pd.testing.assert_frame_equal(result['AAPL']['Alpha Vantage'], mock_alpha_vantage_df_aapl)
+    assert 'Finnhub' in result['AAPL'], "Finnhub data for AAPL missing."
+    assert not result['AAPL']['Finnhub'].empty, "Finnhub data for AAPL should not be empty."
+
+    # Assertions for INVALID
+    assert 'INVALID' in result, "INVALID should be in the result."
+    assert 'Alpha Vantage' in result['INVALID'], "Alpha Vantage data for INVALID missing."
+    assert result['INVALID']['Alpha Vantage'].empty, "Alpha Vantage data for INVALID should be empty."
+    assert 'Finnhub' in result['INVALID'], "Finnhub data for INVALID missing."
+    assert result['INVALID']['Finnhub'].empty, "Finnhub data for INVALID should be empty."
+
+@pytest.mark.asyncio
+async def test_parse_alphavantage_data_missing_keys(data_fetch_utils_fixture):
+    """
+    Test _parse_alphavantage_data with missing keys in the response.
+    """
+    data = {
+        "Time Series (Daily)": {
+            "2023-01-03": {
+                "1. open": "130.0",
+                # Missing '2. high', '3. low', '4. close', '5. volume'
+            }
+        }
+    }
+
+    parsed_df = data_fetch_utils_fixture._parse_alphavantage_data(data)
+
+    expected_df = pd.DataFrame([
+        {
+            'date': pd.to_datetime('2023-01-03'),
+            'open': 130.0,
+            'high': 0.0,
+            'low': 0.0,
+            'close': 0.0,
+            'volume': 0
+        }
+    ]).set_index('date')
+
+    pd.testing.assert_frame_equal(parsed_df, expected_df)
+
+
+
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_quote_unexpected_exception(data_fetch_utils_fixture):
+    """
+    Test fetch_finnhub_quote handling of unexpected exceptions.
+    """
+    symbol = 'AAPL'
+    with aioresponses() as mocked:
+        url_pattern = re.compile(
+            rf"https://finnhub\.io/api/v1/quote\?symbol={symbol}&token=test_finnhub_key.*"
+        )
+        mocked.get(url_pattern, exception=Exception("Unexpected Error"))
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_quote(symbol, session)
+
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame even on exception."
+    assert result.empty, "Expected an empty DataFrame when an exception occurs."
+ 
+@pytest.mark.parametrize("missing_key,expect_error", [
+    ("FINNHUB_API_KEY", False),   # Expect a warning only
+    ("NEWSAPI_API_KEY", True),    # Expect an EnvironmentError
+])
+def test_data_fetch_utils_init_missing_keys(monkeypatch, missing_key, expect_error):
+    from Scripts.Utilities.data_fetch_utils import DataFetchUtils, setup_logging
+
+    # Set a default value for NEWSAPI_API_KEY if it's not the key being tested
+    if missing_key != "NEWSAPI_API_KEY":
+        monkeypatch.setenv("NEWSAPI_API_KEY", "test_newsapi_key")
+
+    # Remove the specified environment variable
+    original_value = os.environ.pop(missing_key, None)
+    try:
+        mock_logger = MagicMock()
+        if expect_error:
+            # Missing NEWSAPI_API_KEY should raise EnvironmentError
+            with pytest.raises(EnvironmentError):
+                DataFetchUtils(logger=mock_logger)
+            print(f"PASS: Missing {missing_key} raised an EnvironmentError as expected.")
+        else:
+            # Missing FINNHUB_API_KEY logs a warning but does not raise
+            instance = DataFetchUtils(logger=mock_logger)
+            # Check if the logger warning was called
+            mock_logger.warning.assert_called_with(
+                "FINNHUB_API_KEY is not set in environment variables. Finnhub features may fail."
+            )
+            assert instance is not None, "DataFetchUtils should still be created without Finnhub key."
+            print(f"PASS: Missing {missing_key} logged a warning as expected.")
+    finally:
+        # Restore the original environment variable if it existed
+        if original_value is not None:
+            os.environ[missing_key] = original_value
+
+
+def test_parse_finnhub_metrics_data_valid(data_fetch_utils_fixture):
+    """
+    Test _parse_finnhub_metrics_data with valid data.
+    """
+    data = {
+        "metric": {
+            "52WeekHigh": 123,
+            "52WeekLow": 456,
+            "MarketCapitalization": 789,
+            "P/E": 25.5
+        }
+    }
+
+    parsed_df = data_fetch_utils_fixture._parse_finnhub_metrics_data(data)
+
+    assert isinstance(parsed_df, pd.DataFrame), "Expected a DataFrame."
+    assert not parsed_df.empty, "Expected a non-empty DataFrame."
+    assert "52WeekHigh" in parsed_df.columns, "Missing '52WeekHigh' column."
+    assert "52WeekLow" in parsed_df.columns, "Missing '52WeekLow' column."
+    assert "MarketCapitalization" in parsed_df.columns, "Missing 'MarketCapitalization' column."
+    assert "P/E" in parsed_df.columns, "Missing 'P/E' column."
+    assert parsed_df.index.name == "date_fetched", "Missing or incorrect 'date_fetched' index."
+
+
+@pytest.mark.asyncio
+async def test_fetch_polygon_data_malformed_response(data_fetch_utils_fixture):
+    """
+    Test fetch_polygon_data with a malformed Polygon API response.
+    """
+    symbol = 'AAPL'
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    mock_response = {
+        "results": [
+            {
+                "o": 130.0,
+                "h": 132.0,
+                # Missing 't', 'l', 'c', 'v'
+            }
+        ]
+    }
+
+    with aioresponses() as mocked:
+        url_pattern = re.compile(
+            rf"https://api\.polygon\.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}\?adjusted=true&apiKey=test_polygonio_key"
+        )
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_polygon_data(symbol, session, start_date, end_date)
+
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame even with malformed data."
+    assert result.empty, "Expected an empty DataFrame when response is malformed."

@@ -15,8 +15,13 @@ from textblob import TextBlob
 import yfinance as yf
 from datetime import datetime
 import numpy as np
-from Scripts.Utilities.config_manager import setup_logging
 from datetime import timezone
+if __name__ == "__main__":
+    # Directly running the file
+    from config_manager import setup_logging
+else:
+    # Being imported as a module
+    from .config_manager import setup_logging
 
 
 # -------------------------------------------------------------------
@@ -530,21 +535,29 @@ class DataFetchUtils:
             self.logger.error("No data found in Polygon response.")
             return pd.DataFrame()
 
-        parsed_results = [
-            {
-                'date': datetime.fromtimestamp(item['t'] / 1000, tz=timezone.utc).date(),
-                'open': item['o'],
-                'high': item['h'],
-                'low': item['l'],
-                'close': item['c'],
-                'volume': item['v']
-            }
-            for item in results
-        ]
+        parsed_results = []
+        for item in results:
+            try:
+                parsed_results.append({
+                    'date': datetime.fromtimestamp(item['t'] / 1000, tz=timezone.utc).date(),
+                    'open': item['o'],
+                    'high': item['h'],
+                    'low': item['l'],
+                    'close': item['c'],
+                    'volume': item['v']
+                })
+            except KeyError as e:
+                self.logger.warning(f"Missing key {e} in Polygon response item: {item}. Skipping entry.")
+                continue
+
+        if not parsed_results:
+            self.logger.warning("No valid data entries parsed from Polygon response.")
+            return pd.DataFrame()
 
         df = pd.DataFrame(parsed_results)
         df.set_index('date', inplace=True)
         return df
+
 
     # -------------------------------------------------------------------
     # Fetch Finnhub Metrics
