@@ -1,3 +1,5 @@
+# Scripts/tests/test_data_fetch_core.py
+
 import pytest
 from unittest.mock import patch, MagicMock
 import pandas as pd
@@ -6,26 +8,7 @@ import re
 from aioresponses import aioresponses  
 import aiohttp
 import numpy as np
-
-@pytest.fixture
-def data_fetch_utils_fixture(monkeypatch):
-    # Patch environment variables
-    monkeypatch.setenv('NEWSAPI_API_KEY', 'test_newsapi_key')
-    monkeypatch.setenv('FINNHUB_API_KEY', 'test_finnhub_key')
-    monkeypatch.setenv('ALPACA_API_KEY', 'test_alpaca_key')
-    monkeypatch.setenv('ALPACA_SECRET_KEY', 'test_alpaca_secret')
-    monkeypatch.setenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
-    monkeypatch.setenv('ALPHAVANTAGE_API_KEY', 'test_alphavantage_key')
-    monkeypatch.setenv('POLYGONIO_API_KEY', 'test_polygonio_key')
-    
-    # Mock the logging setup
-    with patch('Scripts.Utilities.config_manager.setup_logging') as mock_logging_setup:
-        mock_logger = MagicMock()
-        mock_logging_setup.return_value = mock_logger
-        
-        # Import DataFetchUtils **after** patching environment variables
-        from Scripts.Utilities.data_fetch_utils import DataFetchUtils
-        yield DataFetchUtils()
+import os
 
 @pytest.mark.asyncio
 async def test_fetch_data_for_multiple_symbols(data_fetch_utils_fixture):
@@ -102,6 +85,7 @@ async def test_fetch_data_for_multiple_symbols(data_fetch_utils_fixture):
 
     # Perform the assertion
     pd.testing.assert_frame_equal(result['AAPL']['Alpha Vantage'], mock_alpha_vantage_df_aapl)
+    pd.testing.assert_frame_equal(result['GOOGL']['Alpha Vantage'], mock_alpha_vantage_df_googl)
 
 @pytest.mark.asyncio
 async def test_fetch_news_data_async_success(data_fetch_utils_fixture):
@@ -186,22 +170,9 @@ async def test_fetch_finnhub_quote_failure(data_fetch_utils_fixture):
     url_pattern = re.compile(rf"https://finnhub\.io/api/v1/quote\?symbol={symbol}&token=test_finnhub_key.*")
     
     with aioresponses() as mocked:
-        mocked.get(url_pattern, status=500)
+        mocked.get(url_pattern, status=500)  # Simulate server error
         async with aiohttp.ClientSession() as session:
             result = await data_fetch_utils_fixture.fetch_finnhub_quote(symbol, session)
-    # Ensure result is a DataFrame even on failure
-    assert isinstance(result, pd.DataFrame)
-    assert result.empty
-
-@pytest.mark.asyncio
-async def test_fetch_news_data_async_failure(data_fetch_utils_fixture):
-    symbol = 'AAPL'
-    url_pattern = re.compile(rf"https://newsapi\.org/v2/everything\?q={symbol}&pageSize=5&apiKey=test_newsapi_key.*")
-    
-    with aioresponses() as mocked:
-        mocked.get(url_pattern, status=429)  # Simulate rate limiting
-        result = await data_fetch_utils_fixture.fetch_news_data_async(symbol, page_size=5)
-    
     # Ensure result is a DataFrame even on failure
     assert isinstance(result, pd.DataFrame)
     assert result.empty
@@ -415,6 +386,938 @@ async def test_fetch_data_for_mixed_symbols(data_fetch_utils_fixture):
     assert result['INVALID']['Alpha Vantage'].empty, "Expected an empty DataFrame for INVALID symbol."
 
 @pytest.mark.asyncio
+async def test_fetch_with_retries_success(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries with a successful request.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+    mock_response = {"data": "success"}
+
+    with aioresponses() as mocked:
+        mocked.get(url, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result after retries
+    assert result == mock_response, "Expected successful response after retries."
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_failure(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries when all retries fail.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+
+    with aioresponses() as mocked:
+        # All attempts return 500 (server error)
+        mocked.get(url, status=500, repeat=True)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result is None after exceeding retries
+    assert result is None, "Expected None when all retries fail."
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_missing_metric(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {}  # Missing "metric"
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame with 'date_fetched' column
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when 'metric' is missing."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_malformed_data(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "metric": "invalid_data"
+    }
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame due to malformed data
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when data is malformed."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_empty_time_series(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "Time Series (Daily)": {}
+    }
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Ensure result is an empty DataFrame
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_missing_timeseries(data_fetch_utils_fixture):
+    """
+    Test fetching data from Alpha Vantage with missing 'Time Series (Daily)'.
+    """
+    symbol = "AAPL"
+    mock_response = {}  # Missing time series data
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Validate the result is an empty DataFrame
+    assert result.empty, "Expected an empty DataFrame for missing 'Time Series (Daily)'"
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_failure(data_fetch_utils_fixture):
+    """
+    Test fetching data from Alpha Vantage with an API failure.
+    """
+    symbol = "AAPL"
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, status=500)  # Simulate server error
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Validate the result is an empty DataFrame
+    assert result.empty, "Expected an empty DataFrame for API failure"
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_success(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries with a successful request.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+    mock_response = {"data": "success"}
+
+    with aioresponses() as mocked:
+        mocked.get(url, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result after retries
+    assert result == mock_response, "Expected successful response after retries"
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_failure(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries when all retries fail.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+
+    with aioresponses() as mocked:
+        # All attempts return 500 (server error)
+        mocked.get(url, status=500, repeat=True)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result is None after exceeding retries
+    assert result is None, "Expected None when all retries fail"
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_missing_metric(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {}  # Missing "metric"
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame with 'date_fetched' column
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when 'metric' is missing."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_malformed_data(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "metric": "invalid_data"
+    }
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame due to malformed data
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when data is malformed."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_empty_time_series(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "Time Series (Daily)": {}
+    }
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Ensure result is an empty DataFrame
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_missing_timeseries(data_fetch_utils_fixture):
+    """
+    Test fetching data from Alpha Vantage with missing 'Time Series (Daily)'.
+    """
+    symbol = "AAPL"
+    mock_response = {}  # Missing time series data
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Validate the result is an empty DataFrame
+    assert result.empty, "Expected an empty DataFrame for missing 'Time Series (Daily)'"
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_failure(data_fetch_utils_fixture):
+    """
+    Test fetching data from Alpha Vantage with an API failure.
+    """
+    symbol = "AAPL"
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, status=500)  # Simulate server error
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Validate the result is an empty DataFrame
+    assert result.empty, "Expected an empty DataFrame for API failure"
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_success(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries with a successful request.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+    mock_response = {"data": "success"}
+
+    with aioresponses() as mocked:
+        mocked.get(url, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result after retries
+    assert result == mock_response, "Expected successful response after retries"
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_failure(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries when all retries fail.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+
+    with aioresponses() as mocked:
+        # All attempts return 500 (server error)
+        mocked.get(url, status=500, repeat=True)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result is None after exceeding retries
+    assert result is None, "Expected None when all retries fail"
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_missing_metric(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {}  # Missing "metric"
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame with 'date_fetched' column
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when 'metric' is missing."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_malformed_data(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "metric": "invalid_data"
+    }
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame due to malformed data
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when data is malformed."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_empty_time_series(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "Time Series (Daily)": {}
+    }
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Ensure result is an empty DataFrame
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_missing_timeseries(data_fetch_utils_fixture):
+    """
+    Test fetching data from Alpha Vantage with missing 'Time Series (Daily)'.
+    """
+    symbol = "AAPL"
+    mock_response = {}  # Missing time series data
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Validate the result is an empty DataFrame
+    assert result.empty, "Expected an empty DataFrame for missing 'Time Series (Daily)'"
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_failure(data_fetch_utils_fixture):
+    """
+    Test fetching data from Alpha Vantage with an API failure.
+    """
+    symbol = "AAPL"
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, status=500)  # Simulate server error
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Validate the result is an empty DataFrame
+    assert result.empty, "Expected an empty DataFrame for API failure"
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_success(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries with a successful request.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+    mock_response = {"data": "success"}
+
+    with aioresponses() as mocked:
+        mocked.get(url, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result after retries
+    assert result == mock_response, "Expected successful response after retries"
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_failure(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries when all retries fail.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+
+    with aioresponses() as mocked:
+        # All attempts return 500 (server error)
+        mocked.get(url, status=500, repeat=True)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result is None after exceeding retries
+    assert result is None, "Expected None when all retries fail"
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_missing_metric(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {}  # Missing "metric"
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame with 'date_fetched' column
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when 'metric' is missing."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_malformed_data(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "metric": "invalid_data"
+    }
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame due to malformed data
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when data is malformed."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_empty_time_series(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "Time Series (Daily)": {}
+    }
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Ensure result is an empty DataFrame
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_missing_timeseries(data_fetch_utils_fixture):
+    """
+    Test fetching data from Alpha Vantage with missing 'Time Series (Daily)'.
+    """
+    symbol = "AAPL"
+    mock_response = {}  # Missing time series data
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Validate the result is an empty DataFrame
+    assert result.empty, "Expected an empty DataFrame for missing 'Time Series (Daily)'"
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_failure(data_fetch_utils_fixture):
+    """
+    Test fetching data from Alpha Vantage with an API failure.
+    """
+    symbol = "AAPL"
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, status=500)  # Simulate server error
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Validate the result is an empty DataFrame
+    assert result.empty, "Expected an empty DataFrame for API failure"
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_success(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries with a successful request.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+    mock_response = {"data": "success"}
+
+    with aioresponses() as mocked:
+        mocked.get(url, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result after retries
+    assert result == mock_response, "Expected successful response after retries"
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_failure(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries when all retries fail.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+
+    with aioresponses() as mocked:
+        # All attempts return 500 (server error)
+        mocked.get(url, status=500, repeat=True)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result is None after exceeding retries
+    assert result is None, "Expected None when all retries fail"
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_missing_metric(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {}  # Missing "metric"
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame with 'date_fetched' column
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when 'metric' is missing."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_malformed_data(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "metric": "invalid_data"
+    }
+
+    url_pattern = re.compile(
+        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+
+    # Expect an empty DataFrame due to malformed data
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame when data is malformed."
+    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_empty_time_series(data_fetch_utils_fixture):
+    symbol = "AAPL"
+    mock_response = {
+        "Time Series (Daily)": {}
+    }
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Ensure result is an empty DataFrame
+    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
+    assert result.empty, "Expected an empty DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_missing_timeseries(data_fetch_utils_fixture):
+    """
+    Test fetching data from Alpha Vantage with missing 'Time Series (Daily)'.
+    """
+    symbol = "AAPL"
+    mock_response = {}  # Missing time series data
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Validate the result is an empty DataFrame
+    assert result.empty, "Expected an empty DataFrame for missing 'Time Series (Daily)'"
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_failure(data_fetch_utils_fixture):
+    """
+    Test fetching data from Alpha Vantage with an API failure.
+    """
+    symbol = "AAPL"
+
+    url_pattern = re.compile(
+        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
+    )
+
+    with aioresponses() as mocked:
+        mocked.get(url_pattern, status=500)  # Simulate server error
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+
+    # Validate the result is an empty DataFrame
+    assert result.empty, "Expected an empty DataFrame for API failure"
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_success(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries with a successful request.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+    mock_response = {"data": "success"}
+
+    with aioresponses() as mocked:
+        mocked.get(url, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result after retries
+    assert result == mock_response, "Expected successful response after retries"
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_failure(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries when all retries fail.
+    """
+    url = "https://example.com/api/data"
+    headers = {}
+    retries = 3
+
+    with aioresponses() as mocked:
+        # All attempts return 500 (server error)
+        mocked.get(url, status=500, repeat=True)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
+
+    # Verify the result is None after exceeding retries
+    assert result is None, "Expected None when all retries fail"
+
+@pytest.mark.asyncio
+async def test_fetch_finnhub_metrics_success(data_fetch_utils_fixture):
+    symbol = "TSLA"
+    mock_response = {
+        "metric": {
+            "52WeekHigh": 123,
+            "52WeekLow": 456,
+            "MarketCapitalization": 789,
+            "P/E": 25.5
+        }
+    }
+
+    # Exact URL without regex
+    url = f"https://finnhub.io/api/v1/stock/metric?symbol={symbol}&metric=all&token=test_finnhub_key"
+
+    # Fixed timestamp for consistency
+    fixed_time = pd.Timestamp('2025-01-10 03:45:03', tz="UTC").floor("s")
+
+    with patch("pandas.Timestamp.utcnow", return_value=fixed_time):
+        with aioresponses() as mocked:
+            mocked.get(url, payload=mock_response, status=200)
+            print(f"Mocking exact URL: {url}")
+
+            async with aiohttp.ClientSession() as session:
+                result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
+                print(f"Result from fetch_finnhub_metrics: {result}")
+
+    # Define the expected DataFrame
+    expected_df = pd.DataFrame([{
+        "52WeekHigh": 123,
+        "52WeekLow": 456,
+        "MarketCapitalization": 789,
+        "P/E": 25.5,
+        "date_fetched": fixed_time
+    }]).set_index("date_fetched")
+
+    # Normalize timezones to naive datetime64[ns]
+    result = result.reset_index()
+    expected_df = expected_df.reset_index()
+    result["date_fetched"] = pd.to_datetime(result["date_fetched"]).dt.tz_localize(None)
+    expected_df["date_fetched"] = pd.to_datetime(expected_df["date_fetched"]).dt.tz_localize(None)
+
+    # Compare DataFrames
+    assert not result.empty, "Expected a non-empty DataFrame."
+    pd.testing.assert_frame_equal(result, expected_df)
+
+@pytest.mark.asyncio
+async def test_fetch_alphavantage_data_success(data_fetch_utils_fixture):
+    """
+    Test fetching data successfully from Alpha Vantage.
+    """
+    symbol = "AAPL"
+    mock_response = {
+        "Time Series (Daily)": {
+            "2023-01-03": {
+                "1. open": "130.0",
+                "2. high": "132.0",
+                "3. low": "129.0",
+                "4. close": "131.0",
+                "5. volume": "1000000"
+            }
+        }
+    }
+
+    # Exact URL without regex
+    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key"
+
+    with aioresponses() as mocked:
+        mocked.get(url, payload=mock_response, status=200)
+        print(f"Mocking exact URL: {url}")
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
+            print(f"Result from fetch_alphavantage_data: {result}")
+
+    # Define the expected DataFrame
+    expected_df = pd.DataFrame([
+        {
+            'open': 130.0,
+            'high': 132.0,
+            'low': 129.0,
+            'close': 131.0,
+            'volume': 1000000
+        }
+    ], index=pd.to_datetime(['2023-01-03'])).rename_axis('date')
+
+    # Validate the result
+    assert not result.empty, "Expected non-empty DataFrame."
+    pd.testing.assert_frame_equal(result, expected_df)
+
+@pytest.mark.asyncio
+async def test_parse_alphavantage_data_valid(data_fetch_utils_fixture):
+    # Directly test the _parse_alphavantage_data method
+    data = {
+        "Time Series (Daily)": {
+            "2023-01-03": {
+                "1. open": "130.0",
+                "2. high": "132.0",
+                "3. low": "129.0",
+                "4. close": "131.0",
+                "5. volume": "1000000"
+            },
+            "2023-01-04": {
+                "1. open": "131.0",
+                "2. high": "133.0",
+                "3. low": "130.0",
+                "4. close": "132.0",
+                "5. volume": "1500000"
+            }
+        }
+    }
+
+    expected_df = pd.DataFrame([
+        {
+            'date': pd.to_datetime('2023-01-03'),
+            'open': 130.0,
+            'high': 132.0,
+            'low': 129.0,
+            'close': 131.0,
+            'volume': 1000000
+        },
+        {
+            'date': pd.to_datetime('2023-01-04'),
+            'open': 131.0,
+            'high': 133.0,
+            'low': 130.0,
+            'close': 132.0,
+            'volume': 1500000
+        }
+    ]).set_index('date')
+
+    # Access the protected method
+    parsed_df = data_fetch_utils_fixture._parse_alphavantage_data(data)
+    pd.testing.assert_frame_equal(parsed_df, expected_df)
+
+
+@pytest.mark.parametrize("missing_key,expect_error", [
+    ("FINNHUB_API_KEY", False),   # Expect a warning only
+    ("NEWSAPI_API_KEY", True),    # Expect an EnvironmentError
+])
+def test_data_fetch_utils_init_missing_keys(monkeypatch, missing_key, expect_error):
+    from Scripts.Utilities.data_fetch_utils import DataFetchUtils, setup_logging
+    
+    # Patch environment variable
+    original_value = os.environ.pop(missing_key, None)
+    try:
+        mock_logger = MagicMock()
+        if expect_error:
+            # Missing NewsAPI key should raise EnvironmentError
+            with pytest.raises(EnvironmentError):
+                DataFetchUtils(logger=mock_logger)
+        else:
+            # Missing Finnhub key logs a warning but does not raise
+            instance = DataFetchUtils(logger=mock_logger)
+            # Check if the logger warning was called
+            mock_logger.warning.assert_called_with(
+                "FINNHUB_API_KEY is not set in environment variables. Finnhub features may fail."
+            )
+            assert instance is not None, "DataFetchUtils should still be created without Finnhub key."
+    finally:
+        # Restore original env var if it existed
+        if original_value is not None:
+            os.environ[missing_key] = original_value
+
+
+@pytest.mark.asyncio
+async def test_fetch_news_data_async_failure(data_fetch_utils_fixture):
+    symbol = 'AAPL'
+    # Use lookaheads to match required params in any order:
+    url_pattern = re.compile(
+        rf"https://newsapi\.org/v2/everything\?(?=.*q={symbol})(?=.*pageSize=5)(?=.*apiKey=test_newsapi_key).*"
+    )
+
+    with aioresponses(assert_all_requests_are_fired=True) as mocked:
+        # Simulate rate limiting
+        mocked.get(url_pattern, status=429)
+
+        result = await data_fetch_utils_fixture.fetch_news_data_async(symbol, page_size=5)
+
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty, "Expected an empty DataFrame on rate limiting."
+
+
+
+@pytest.mark.asyncio
 async def test_fetch_polygon_data_success(data_fetch_utils_fixture):
     symbol = 'AAPL'
     start_date = '2023-01-01'
@@ -460,184 +1363,4 @@ async def test_fetch_polygon_data_success(data_fetch_utils_fixture):
 
     pd.testing.assert_frame_equal(result, expected_df)
 
-"""
-@pytest.mark.asyncio
-async def test_fetch_with_retries(data_fetch_utils_fixture):
-    url = "https://example.com/api/data"
-    headers = {}
-    retries = 3
 
-    # Mock response for rate limit (429) and eventual success
-    with aioresponses() as mocked:
-        # First two attempts return 429 (rate limit)
-        mocked.get(url, status=429)
-        mocked.get(url, status=429)
-        # Third attempt returns success
-        mocked.get(url, payload={"data": "success"}, status=200)
-
-        async with aiohttp.ClientSession() as session:
-            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
-
-    # Verify the result after retries
-    assert result == {"data": "success"}, "Expected successful response after retries."
-
-    # Test scenario where all retries fail
-    with aioresponses() as mocked:
-        # All attempts return 500 (server error)
-        mocked.get(url, status=500, repeat=True)
-
-        async with aiohttp.ClientSession() as session:
-            result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
-
-    # Verify the result is None after exceeding retries
-    assert result is None, "Expected None when all retries fail."
-
-"""
-
-
-@pytest.mark.asyncio
-async def test_fetch_finnhub_metrics_missing_metric(data_fetch_utils_fixture):
-    symbol = "AAPL"
-    mock_response = {}  # Missing "metric"
-
-    url_pattern = re.compile(
-        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
-    )
-
-    with aioresponses() as mocked:
-        mocked.get(url_pattern, payload=mock_response, status=200)
-
-        async with aiohttp.ClientSession() as session:
-            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
-
-    # Expect an empty DataFrame with 'date_fetched' column
-    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
-    assert result.empty, "Expected an empty DataFrame when 'metric' is missing."
-    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
-
-@pytest.mark.asyncio
-async def test_fetch_finnhub_metrics_malformed_data(data_fetch_utils_fixture):
-    symbol = "AAPL"
-    mock_response = {
-        "metric": "invalid_data"
-    }
-
-    url_pattern = re.compile(
-        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
-    )
-
-    with aioresponses() as mocked:
-        mocked.get(url_pattern, payload=mock_response, status=200)
-
-        async with aiohttp.ClientSession() as session:
-            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
-
-    # Expect an empty DataFrame due to malformed data
-    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
-    assert result.empty, "Expected an empty DataFrame when data is malformed."
-    assert "date_fetched" in result.columns, "Expected 'date_fetched' column in the DataFrame."
-
-
-@pytest.mark.asyncio
-async def test_fetch_finnhub_metrics_success(data_fetch_utils_fixture):
-    symbol = "AAPL"
-    mock_response = {
-        "metric": {
-            "52WeekHigh": 150.0,
-            "52WeekLow": 100.0,
-            "MarketCapitalization": 2500.0,
-            "P/E": 25.0,
-        }
-    }
-
-    # Fixed timestamp for consistency
-    fixed_time = pd.Timestamp('2025-01-10 03:45:03', tz="UTC").floor("s")
-
-    expected_df = pd.DataFrame([{
-        "52WeekHigh": 150.0,
-        "52WeekLow": 100.0,
-        "MarketCapitalization": 2500.0,
-        "P/E": 25.0,
-        "date_fetched": fixed_time,
-    }]).set_index("date_fetched")
-
-    url_pattern = re.compile(
-        rf"https://finnhub\.io/api/v1/stock/metric\?(?=.*symbol={symbol})(?=.*metric=all)(?=.*token=test_finnhub_key).*"
-    )
-
-    with patch("pandas.Timestamp.utcnow", return_value=fixed_time):
-        with aioresponses() as mocked:
-            mocked.get(url_pattern, payload=mock_response, status=200)
-
-            async with aiohttp.ClientSession() as session:
-                result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
-
-    # Ensure that result is not empty
-    assert not result.empty, "Expected a non-empty DataFrame."
-
-    # Reset index for comparison
-    result = result.reset_index()
-    expected_df = expected_df.reset_index()
-
-    # Normalize timezones to naive datetime64[ns]
-    result["date_fetched"] = result["date_fetched"].dt.tz_localize(None).astype('datetime64[ns]')
-    expected_df["date_fetched"] = expected_df["date_fetched"].dt.tz_localize(None).astype('datetime64[ns]')
-
-    # Compare DataFrames
-    pd.testing.assert_frame_equal(result, expected_df)
-
-
-@pytest.mark.asyncio
-async def test_fetch_alphavantage_data_empty_time_series(data_fetch_utils_fixture):
-    symbol = "AAPL"
-    mock_response = {
-        "Time Series (Daily)": {}
-    }
-
-    url_pattern = re.compile(
-        rf"https://www\.alphavantage\.co/query\?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=test_alphavantage_key.*"
-    )
-
-    with aioresponses() as mocked:
-        mocked.get(url_pattern, payload=mock_response, status=200)
-
-        async with aiohttp.ClientSession() as session:
-            result = await data_fetch_utils_fixture.fetch_alphavantage_data(symbol, session, '2023-01-01', '2023-01-31')
-
-    # Expect an empty DataFrame due to no data
-    assert isinstance(result, pd.DataFrame), "Expected a DataFrame."
-    assert result.empty, "Expected an empty DataFrame when time series is empty."
-@pytest.mark.asyncio
-async def test_fetch_finnhub_data_success(data_fetch_utils_fixture):
-    symbol = "AAPL"
-    mock_response = {
-        "metric": {
-            "some_metric": 123,
-            "another_metric": 456
-        }
-    }
-
-    url_pattern = re.compile(
-        rf"https://finnhub\.io/api/v1/stock/metric\?symbol={symbol}&metric=all&token=test_finnhub_key.*"
-    )
-
-    with aioresponses() as mocked:
-        mocked.get(url_pattern, payload=mock_response, status=200)
-
-        async with aiohttp.ClientSession() as session:
-            result = await data_fetch_utils_fixture.fetch_finnhub_metrics(symbol, session)
-
-    # Assuming _parse_finnhub_metrics_data parses 'some_metric' and 'another_metric'
-    expected_df = pd.DataFrame([{
-        "some_metric": 123,
-        "another_metric": 456,
-        "date_fetched": pd.Timestamp.utcnow().floor("s")
-    }]).set_index("date_fetched")
-
-    # Normalize timezones to naive datetime64[ns]
-    result = result.reset_index()
-    expected_df = expected_df.reset_index()
-    result["date_fetched"] = result["date_fetched"].dt.tz_localize(None).astype('datetime64[ns]')
-    expected_df["date_fetched"] = expected_df["date_fetched"].dt.tz_localize(None).astype('datetime64[ns]')
-
-    pd.testing.assert_frame_equal(result, expected_df)

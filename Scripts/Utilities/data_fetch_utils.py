@@ -18,6 +18,7 @@ import numpy as np
 from Scripts.Utilities.config_manager import setup_logging
 from datetime import timezone
 
+
 # -------------------------------------------------------------------
 # Locate and load environment
 # -------------------------------------------------------------------
@@ -112,35 +113,44 @@ class DataFetchUtils:
     # Fetch with Retries
     # -------------------------------------------------------------------
 
-    async def fetch_with_retries(self, url: str, headers: Dict[str, str], session: ClientSession, retries: int = 3) -> Optional[Any]:
+    async def fetch_with_retries(
+        self, url: str, headers: Dict[str, str], session: ClientSession, retries: int = 3
+    ) -> Optional[Any]:
         """
         Fetches data from the provided URL with retries on failure.
         Implements exponential backoff.
         """
         for attempt in range(retries):
             try:
-                self.logger.debug(f"Fetching data from URL: {url}, Attempt: {attempt + 1}")
+                self.logger.debug(f"Attempt {attempt + 1}/{retries} - Fetching URL: {url}")
                 async with session.get(url, headers=headers, timeout=30) as response:
+                    self.logger.debug(f"Response status: {response.status}")
                     if response.status == 200:
                         data = await response.json()
-                        self.logger.debug(f"Fetched data: {data}")
+                        self.logger.debug(f"Successful response data: {data}")
                         return data
                     elif response.status == 429:
-                        self.logger.warning(f"Rate limit reached. Attempt {attempt + 1}/{retries}")
+                        self.logger.warning(
+                            f"Rate limit reached (429). Retrying after delay. Attempt {attempt + 1}/{retries}"
+                        )
                         await asyncio.sleep(60)  # Wait before retrying
                     else:
                         error_message = await response.text()
-                        self.logger.error(f"Failed to fetch data from {url}. Status: {response.status}, Message: {error_message}")
+                        self.logger.error(
+                            f"HTTP Error from {url} - Status: {response.status}, Message: {error_message}"
+                        )
             except ClientConnectionError as e:
-                self.logger.error(f"ClientConnectionError: {e}")
+                self.logger.error(f"ClientConnectionError on URL {url}: {e}")
             except ContentTypeError as e:
-                self.logger.error(f"ContentTypeError: {e}")
+                self.logger.error(f"ContentTypeError on URL {url}: {e}")
             except asyncio.TimeoutError:
-                self.logger.error(f"Timeout error fetching data from {url}. Retrying ({attempt + 1}/{retries})...")
+                self.logger.error(
+                    f"Timeout error while fetching {url}. Retrying attempt {attempt + 1}/{retries}..."
+                )
             except Exception as e:
-                self.logger.error(f"Unexpected error: {e}")
+                self.logger.error(f"Unexpected error during fetch from {url}: {e}")
 
-            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            await asyncio.sleep(2 ** attempt)  # Exponential backoff delay
 
         self.logger.error(f"Failed to fetch data after {retries} attempts: {url}")
         return None
@@ -229,7 +239,6 @@ class DataFetchUtils:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.get_stock_data, ticker, start_date, end_date, interval)
 
-
     # -------------------------------------------------------------------
     # Fetch Alpaca Data
     # -------------------------------------------------------------------
@@ -268,7 +277,6 @@ class DataFetchUtils:
         except Exception as e:
             self.logger.error(f"Error fetching Alpaca data for {symbol}: {e}")
             return pd.DataFrame()
-
 
     # -------------------------------------------------------------------
     # Fetch News Data via NewsAPI
@@ -392,7 +400,7 @@ class DataFetchUtils:
 
         if "Finnhub" in data_sources:
             try:
-                finnhub_data = await self.fetch_finnhub_data(symbol, session, start_date, end_date)
+                finnhub_data = await self.fetch_finnhub_metrics(symbol, session)
                 symbol_data["Finnhub"] = finnhub_data
             except Exception as e:
                 self.logger.error(f"Finnhub data fetch failed for {symbol}: {e}")
@@ -410,18 +418,51 @@ class DataFetchUtils:
     # Fetch Alpha Vantage Data
     # -------------------------------------------------------------------
 
-    async def fetch_alphavantage_data(self, symbol: str, session: ClientSession, start_date: str, end_date: str) -> pd.DataFrame:
+    async def fetch_alphavantage_data(
+        self, symbol: str, session: ClientSession, start_date: str, end_date: str
+    ) -> pd.DataFrame:
         """
         Fetches historical data for a symbol from Alpha Vantage.
+
+        Args:
+            symbol (str): The stock symbol to fetch data for.
+            session (ClientSession): The aiohttp session for making requests.
+            start_date (str): Start date for filtering data (not used in Alpha Vantage API directly).
+            end_date (str): End date for filtering data (not used in Alpha Vantage API directly).
+
+        Returns:
+            pd.DataFrame: A DataFrame containing the parsed historical data.
         """
-        api_key = os.getenv('ALPHAVANTAGE_API_KEY')
+        api_key = os.getenv("ALPHAVANTAGE_API_KEY")
         if not api_key:
-            self.logger.error("Alpha Vantage API key is not set in environment variables.")
+            self.logger.error("Alpha Vantage API key is missing.")
             return pd.DataFrame()
 
         url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={api_key}"
-        data = await self.fetch_with_retries(url, headers={}, session=session)
-        return self._parse_alphavantage_data(data)
+        self.logger.debug(f"Attempting to fetch Alpha Vantage data for {symbol} from URL: {url}")
+
+        try:
+            # Fetch raw data with retries
+            data = await self.fetch_with_retries(url, headers={}, session=session)
+
+            # Validate response
+            if not data:
+                self.logger.error(f"No data received for {symbol} from Alpha Vantage.")
+                return pd.DataFrame()
+
+            # Parse the fetched data
+            parsed_data = self._parse_alphavantage_data(data)
+
+            if parsed_data.empty:
+                self.logger.warning(f"No valid time series data found for {symbol}. Parsed DataFrame is empty.")
+            else:
+                self.logger.info(f"Successfully fetched and parsed Alpha Vantage data for {symbol}.")
+
+            return parsed_data
+
+        except Exception as e:
+            self.logger.error(f"Unexpected error while fetching Alpha Vantage data for {symbol}: {e}")
+            return pd.DataFrame()
 
     # -------------------------------------------------------------------
     # Fetch Polygon Data
@@ -447,25 +488,27 @@ class DataFetchUtils:
     # Parse Alpha Vantage Data
     # -------------------------------------------------------------------
 
-    def _parse_alphavantage_data(self, data: Dict[str, Any]) -> pd.DataFrame:
+    def _parse_alphavantage_data(self, data: Optional[Dict[str, Any]]) -> pd.DataFrame:
         """
         Parses Alpha Vantage data into a pandas DataFrame.
         """
-        time_series_key = "Time Series (Daily)"
-        time_series = data.get(time_series_key, {})
+        if not data:
+            self.logger.error("No data received for parsing.")
+            return pd.DataFrame()
 
+        time_series = data.get("Time Series (Daily)", {})
         if not time_series:
-            self.logger.error(f"No data found for key: {time_series_key}")
+            self.logger.error("No 'Time Series (Daily)' found in Alpha Vantage response.")
             return pd.DataFrame()
 
         results = [
             {
-                'date': pd.to_datetime(date).date(),
-                'open': float(values["1. open"]),
-                'high': float(values["2. high"]),
-                'low': float(values["3. low"]),
-                'close': float(values["4. close"]),
-                'volume': int(values["5. volume"])
+                'date': pd.to_datetime(date),
+                'open': float(values.get('1. open', 0)),
+                'high': float(values.get('2. high', 0)),
+                'low': float(values.get('3. low', 0)),
+                'close': float(values.get('4. close', 0)),
+                'volume': int(values.get('5. volume', 0))
             }
             for date, values in time_series.items()
         ]
@@ -527,17 +570,26 @@ class DataFetchUtils:
 
     def _parse_finnhub_metrics_data(self, data: Dict[str, Any]) -> pd.DataFrame:
         """
-        Parses Finnhub financial metrics data into a pandas DataFrame.
+        Parses Finnhub metrics data into a pandas DataFrame.
         """
-        metrics = data.get("metric", {})
-        if not metrics:
-            self.logger.error("No metric data found in Finnhub response.")
-            return pd.DataFrame(columns=["date_fetched"])  # Ensure the DataFrame has this column
+        self.logger.debug(f"Raw Finnhub data received: {data}")
 
-        df = pd.DataFrame([metrics])
-        df["date_fetched"] = pd.Timestamp.utcnow().floor("s")  # Add a consistent timestamp
-        df.set_index("date_fetched", inplace=True)
-        return df
+        if "metric" not in data or not isinstance(data["metric"], dict):
+            self.logger.error("Invalid or missing 'metric' key in Finnhub response.")
+            return pd.DataFrame()
+
+        # Extract metrics
+        metrics = data["metric"]
+        result = pd.DataFrame([{
+            "52WeekHigh": metrics.get("52WeekHigh"),
+            "52WeekLow": metrics.get("52WeekLow"),
+            "MarketCapitalization": metrics.get("MarketCapitalization"),
+            "P/E": metrics.get("P/E"),
+            "date_fetched": pd.Timestamp.utcnow().floor("s")
+        }]).set_index("date_fetched")
+
+        self.logger.debug(f"Parsed Finnhub DataFrame: {result}")
+        return result
 
     # -------------------------------------------------------------------
     # Additional Helper Methods
