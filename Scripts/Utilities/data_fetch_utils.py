@@ -15,13 +15,18 @@ from textblob import TextBlob
 import yfinance as yf
 from datetime import datetime
 import numpy as np
+from urllib.parse import urlparse
 from datetime import timezone
-if __name__ == "__main__":
-    # Directly running the file
-    from config_manager import setup_logging
-else:
-    # Being imported as a module
-    from .config_manager import setup_logging
+try:
+    from config_manager import setup_logging  # When running the script directly
+except ImportError:
+    from Scripts.Utilities.config_manager import setup_logging  # When the script is imported as a module
+
+
+
+
+
+
 
 
 # -------------------------------------------------------------------
@@ -60,9 +65,12 @@ LOGGER = setup_logging(
 # Initialize Alpaca
 # -------------------------------------------------------------------
 
+LOGGER = logging.getLogger(__name__)
+
 def initialize_alpaca() -> Optional[tradeapi.REST]:
     """
     Initializes Alpaca API client using credentials from environment variables.
+    Validates the URL format before initializing.
     """
     api_key = os.getenv('ALPACA_API_KEY')
     secret_key = os.getenv('ALPACA_SECRET_KEY')
@@ -72,10 +80,21 @@ def initialize_alpaca() -> Optional[tradeapi.REST]:
         LOGGER.error("Alpaca API credentials are not fully set in environment variables.")
         return None
 
+    # Validate the base URL
+    parsed_url = urlparse(base_url)
+    if not parsed_url.scheme or not parsed_url.netloc:
+        raise ValueError(f"Invalid URL: {base_url}")
+
     LOGGER.info("Initializing Alpaca API with provided credentials.")
     return tradeapi.REST(api_key, secret_key, base_url, api_version='v2')
 
-ALPACA_CLIENT = initialize_alpaca()
+# Initialize the Alpaca client
+try:
+    ALPACA_CLIENT = initialize_alpaca()
+except ValueError as e:
+    LOGGER.error(f"Failed to initialize Alpaca client: {e}")
+    ALPACA_CLIENT = None
+
 
 # -------------------------------------------------------------------
 # DataFetchUtils Class

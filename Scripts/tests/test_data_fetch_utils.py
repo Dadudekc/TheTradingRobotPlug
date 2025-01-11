@@ -1800,3 +1800,72 @@ async def test_fetch_news_data_async_unexpected_fields(data_fetch_utils_fixture)
         result = await data_fetch_utils_fixture.fetch_news_data_async(symbol, page_size=1)
 
     assert 'unexpected_field' not in result.columns, "Unexpected field should not appear in the DataFrame."
+
+@pytest.mark.asyncio
+async def test_fetch_polygon_data_unexpected_keys(data_fetch_utils_fixture):
+    symbol = 'AAPL'
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    mock_response = {
+        "results": [
+            {
+                "unexpected_key": 12345,
+                "t": 1672531200000,
+                "o": 130.0,
+                "h": 132.0,
+                "l": 129.0,
+                "c": 131.0,
+                "v": 1000000
+            }
+        ]
+    }
+
+    with aioresponses() as mocked:
+        url_pattern = re.compile(
+            rf"https://api\.polygon\.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}\?adjusted=true&apiKey=test_polygonio_key"
+        )
+        mocked.get(url_pattern, payload=mock_response, status=200)
+
+        async with aiohttp.ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_polygon_data(symbol, session, start_date, end_date)
+
+    assert not result.empty, "Expected non-empty DataFrame."
+    assert 'unexpected_key' not in result.columns, "Unexpected key should not appear in the DataFrame."
+
+
+def test_parse_polygon_data_invalid_timestamps(data_fetch_utils_fixture):
+    data = {
+        "results": [
+            {
+                "t": "invalid_timestamp",  # Invalid timestamp
+                "o": 130.0,
+                "h": 132.0,
+                "l": 129.0,
+                "c": 131.0,
+                "v": 1000000
+            }
+        ]
+    }
+    with pytest.raises(TypeError, match="unsupported operand type"):
+        data_fetch_utils_fixture._parse_polygon_data(data)
+
+
+def test_initialize_alpaca_invalid_config(monkeypatch):
+    from Scripts.Utilities.data_fetch_utils import initialize_alpaca
+
+    # Missing keys
+    monkeypatch.delenv('ALPACA_API_KEY', raising=False)
+    monkeypatch.delenv('ALPACA_SECRET_KEY', raising=False)
+    assert initialize_alpaca() is None, "Expected None with missing Alpaca keys."
+
+    # Invalid URL
+    monkeypatch.setenv('ALPACA_API_KEY', 'dummy_key')
+    monkeypatch.setenv('ALPACA_SECRET_KEY', 'dummy_secret')
+    monkeypatch.setenv('ALPACA_BASE_URL', 'invalid_url')
+    with pytest.raises(ValueError, match="Invalid URL"):
+        initialize_alpaca()
+
+    # Valid configuration
+    monkeypatch.setenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+    client = initialize_alpaca()
+    assert client is not None, "Expected a valid Alpaca client with correct configuration."
