@@ -13,8 +13,9 @@ from dotenv import load_dotenv
 from pathlib import Path
 from collections import defaultdict
 import logging
-from typing import Any, Optional, List, Dict, Union, Type
+from typing import Any, Optional, List, Dict, Union, Type, Callable
 import threading
+
 
 def setup_logging(
     script_name: str,
@@ -49,6 +50,7 @@ def setup_logging(
 
     return logger
 
+
 class ConfigManager:
     """
     A manager that loads configurations from YAML, JSON, TOML files and .env files,
@@ -62,6 +64,14 @@ class ConfigManager:
     `strict_keys=True` is set, required keys must exist in config dictionary or OS environment
     explicitly (i.e., ignoring .env).
     """
+
+    # Mapping of file extensions to their respective loader functions
+    _CONFIG_LOADERS: Dict[str, Callable[[Path], Dict[str, Any]]] = {
+        '.yaml': lambda path: yaml.safe_load(path.read_text()) or {},
+        '.yml': lambda path: yaml.safe_load(path.read_text()) or {},
+        '.json': lambda path: json.loads(path.read_text()) or {},
+        '.toml': lambda path: toml.loads(path.read_text()) or {},
+    }
 
     def __init__(
         self,
@@ -130,15 +140,18 @@ class ConfigManager:
                 continue
 
             file_ext = config_file.suffix.lower()
+            loader = self._CONFIG_LOADERS.get(file_ext)
+
+            if not loader:
+                self.logger.warning(f"Unsupported config file format: {config_file}")
+                continue
+
             try:
-                if file_ext in ['.yaml', '.yml']:
-                    self._load_yaml(config_file)
-                elif file_ext == '.json':
-                    self._load_json(config_file)
-                elif file_ext == '.toml':
-                    self._load_toml(config_file)
-                else:
-                    self.logger.warning(f"Unsupported config file format: {config_file}")
+                data = loader(config_file)
+                if data:
+                    flattened = self._flatten_dict(data)
+                    self.config.update(flattened)
+                self.logger.info(f"Loaded {file_ext.upper()} config from {config_file}")
             except Exception as e:
                 self.logger.error(f"Error loading {config_file}: {e}")
 
@@ -217,24 +230,48 @@ class ConfigManager:
             # Type casting if needed
             if value is not None and value_type is not None:
                 try:
-                    if value_type == bool:
-                        value = self._str_to_bool(value)
-                    elif value_type == list:
-                        if isinstance(value, str):
-                            value = [item.strip() for item in value.split(',')]
-                        else:
-                            value = list(value)
-                    elif value_type == dict:
-                        if isinstance(value, str):
-                            value = json.loads(value)
-                    else:
-                        value = value_type(value)
+                    value = self._cast_value(env_key, value, value_type)
                 except Exception as e:
                     self.logger.error(f"Failed to cast config key '{env_key}' to {value_type}: {e}")
                     raise TypeError(f"Failed to cast config key '{env_key}' to {value_type}: {e}")
 
             self.cache[full_key] = value
             return value
+
+    def _cast_value(self, env_key: str, value: Any, value_type: Type) -> Any:
+        """
+        Casts the value to the specified type.
+
+        Args:
+            env_key (str): The environment key for logging purposes.
+            value (Any): The value to cast.
+            value_type (Type): The target type.
+
+        Returns:
+            Any: The casted value.
+
+        Raises:
+            ValueError: If conversion to bool fails.
+            TypeError: If other type conversions fail.
+        """
+        if value_type == bool:
+            return self._str_to_bool(value)
+        elif value_type == list:
+            if isinstance(value, str):
+                return [item.strip() for item in value.split(',')]
+            elif isinstance(value, (list, tuple)):
+                return list(value)
+            else:
+                raise TypeError(f"Cannot cast type {type(value)} to list.")
+        elif value_type == dict:
+            if isinstance(value, str):
+                return json.loads(value)
+            elif isinstance(value, dict):
+                return value
+            else:
+                raise TypeError(f"Cannot cast type {type(value)} to dict.")
+        else:
+            return value_type(value)
 
     def _str_to_bool(self, value: Union[str, bool, int]) -> bool:
         """
@@ -259,45 +296,6 @@ class ConfigManager:
             elif value.lower() in ['false', '0', 'no', 'off']:
                 return False
         raise ValueError(f"Cannot convert {value} to bool.")
-
-    def _load_yaml(self, config_file: Path):
-        """Loads configuration settings from a YAML file."""
-        try:
-            with open(config_file, 'r') as f:
-                data = yaml.safe_load(f)
-                if data:
-                    flattened = self._flatten_dict(data)
-                    for k, v in flattened.items():
-                        self.config[k] = v
-            self.logger.info(f"Loaded YAML config from {config_file}")
-        except Exception as e:
-            self.logger.error(f"Error loading {config_file}: {e}")
-
-    def _load_json(self, config_file: Path):
-        """Loads configuration settings from a JSON file."""
-        try:
-            with open(config_file, 'r') as f:
-                data = json.load(f)
-                if data:
-                    flattened = self._flatten_dict(data)
-                    for k, v in flattened.items():
-                        self.config[k] = v
-            self.logger.info(f"Loaded JSON config from {config_file}")
-        except Exception as e:
-            self.logger.error(f"Error loading {config_file}: {e}")
-
-    def _load_toml(self, config_file: Path):
-        """Loads configuration settings from a TOML file."""
-        try:
-            with open(config_file, 'r') as f:
-                data = toml.load(f)
-                if data:
-                    flattened = self._flatten_dict(data)
-                    for k, v in flattened.items():
-                        self.config[k] = v
-            self.logger.info(f"Loaded TOML config from {config_file}")
-        except Exception as e:
-            self.logger.error(f"Error loading {config_file}: {e}")
 
     def _load_env(self, env_path: Path):
         """Loads environment variables from a .env file, overriding existing ones."""
