@@ -1,4 +1,3 @@
-# .github/workflows/python-app.yml
 name: Python Application
 
 on:
@@ -8,8 +7,13 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: [3.10, 3.11, 3.12]
+      fail-fast: true
 
     steps:
       # Checkout code
@@ -20,7 +24,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12'  # Ensure this version is supported
+          python-version: ${{ matrix.python-version }}
 
       # Cache Python dependencies
       - name: Cache Python packages
@@ -35,9 +39,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e . pytest pytest-mock
+          pip install -r requirements.txt
 
-      # Run tests
-      - name: Run tests
+      # Run tests with coverage
+      - name: Run tests with coverage
         run: |
-          pytest tests/
+          pytest --cov=Scripts --cov-report=term-missing tests/
+
+      # Upload coverage report
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: .coverage
