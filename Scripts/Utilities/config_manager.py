@@ -22,27 +22,32 @@ class ConfigManager:
                  config_files: Optional[List[Path]] = None, 
                  env_file: Optional[Path] = None,
                  required_keys: Optional[List[str]] = None, 
-                 logger: Optional[logging.Logger] = None):
+                 logger: Optional[logging.Logger] = None,
+                 project_root: Optional[Path] = None):
         """
         Initializes the ConfigManager and loads configurations from various sources.
 
         Args:
-            config_files (list): A list of configuration files to load (YAML, JSON, TOML).
-            env_file (Path): Path to the .env file. If not provided, attempts to load from project root.
-            required_keys (list): A list of required configuration keys to check for.
-            logger (Logger): Logger object to log messages (optional).
+            config_files (List[Path], optional): A list of configuration files to load (YAML, JSON, TOML).
+            env_file (Path, optional): Path to the .env file. If not provided, attempts to load from project root.
+            required_keys (List[str], optional): A list of required configuration keys to check for.
+            logger (logging.Logger, optional): Logger object to log messages (optional).
+            project_root (Path, optional): Explicit project root path. If not provided, auto-detects.
         """
         self.config = defaultdict(dict)  # For flattened configs
         self.logger = logger or self.setup_logger("ConfigManager")
         self.cache = {}  # Cache for config values
         self.lock = threading.Lock()  # For thread-safe operations
 
-        # Dynamically determine project root based on this file's location
-        script_dir = Path(__file__).resolve().parent
-        project_root = script_dir.parents[2]  # Adjust based on your project structure
+        # Determine the project root
+        if project_root:
+            self.project_root = project_root.resolve()
+        else:
+            script_dir = Path(__file__).resolve().parent
+            self.project_root = script_dir.parents[2]  # Adjust based on your project structure
 
         # Determine the .env file path
-        env_path = env_file or (project_root / '.env')
+        env_path = env_file or (self.project_root / '.env')
         if env_path.exists():
             self._load_env(env_path)
         else:
@@ -87,10 +92,10 @@ class ConfigManager:
 
         Args:
             key (str): The key to retrieve.
-            default (Any): Default value if the key is not found.
-            fallback (Any): Optional fallback if the key is not found in config or env.
-            required (bool): If True, raises an error if the key is missing.
-            value_type (Type): The expected type of the configuration value. If provided, casts the value.
+            default (Any, optional): Default value if the key is not found.
+            fallback (Any, optional): Optional fallback if the key is not found in config or env.
+            required (bool, optional): If True, raises an error if the key is missing.
+            value_type (Type, optional): The expected type of the configuration value. If provided, casts the value.
 
         Returns:
             Any: The retrieved configuration value, optionally cast to the specified type.
@@ -107,7 +112,8 @@ class ConfigManager:
                 return self.cache[full_key]
 
             # Attempt to retrieve the value from environment variables
-            env_key = full_key.upper()
+            # Replace dots with underscores to match environment variable naming
+            env_key = full_key.upper().replace('.', '_')
             value = os.getenv(env_key)
 
             # If still None, check the loaded config
@@ -215,8 +221,11 @@ class ConfigManager:
 
     def _load_env(self, env_path: Path):
         """Loads environment variables from a .env file."""
-        load_dotenv(dotenv_path=env_path)
-        self.logger.info(f"Loaded environment variables from {env_path}")
+        try:
+            load_dotenv(dotenv_path=env_path)
+            self.logger.info(f"Loaded environment variables from {env_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to load environment variables from {env_path}: {e}")
 
     def _flatten_dict(self, d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
         """
@@ -224,8 +233,8 @@ class ConfigManager:
 
         Args:
             d (Dict[str, Any]): The dictionary to flatten.
-            parent_key (str): The base key string.
-            sep (str): Separator between keys.
+            parent_key (str, optional): The base key string.
+            sep (str, optional): Separator between keys.
 
         Returns:
             Dict[str, Any]: The flattened dictionary.
@@ -279,11 +288,11 @@ class ConfigManager:
         Returns:
             str: The constructed database URL.
         """
-        db_user = self.get('POSTGRES_USER', required=True)
-        db_password = self.get('POSTGRES_PASSWORD', required=True)
-        db_host = self.get('POSTGRES_HOST', required=True)
-        db_port = self.get('POSTGRES_PORT', required=True)
-        db_name = self.get('POSTGRES_DBNAME', required=True)
+        db_user = self.get('database.user', required=True)
+        db_password = self.get('database.password', required=True)
+        db_host = self.get('database.host', required=True)
+        db_port = self.get('database.port', required=True)
+        db_name = self.get('database.dbname', required=True)
 
         db_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
         return db_url
@@ -295,11 +304,11 @@ class ConfigManager:
         Returns:
             str: The constructed asynchronous database URL.
         """
-        db_user = self.get('POSTGRES_USER', required=True)
-        db_password = self.get('POSTGRES_PASSWORD', required=True)
-        db_host = self.get('POSTGRES_HOST', required=True)
-        db_port = self.get('POSTGRES_PORT', required=True)
-        db_name = self.get('POSTGRES_DBNAME', required=True)
+        db_user = self.get('database.user', required=True)
+        db_password = self.get('database.password', required=True)
+        db_host = self.get('database.host', required=True)
+        db_port = self.get('database.port', required=True)
+        db_name = self.get('database.dbname', required=True)
 
         async_db_url = f"postgresql+asyncpg://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
         return async_db_url
@@ -359,8 +368,8 @@ class ConfigManager:
             console_handler.setLevel(logging.INFO)
 
             # Create file handler
-            script_dir = Path(__file__).resolve().parent
-            project_root = script_dir.parents[2]
+            # Adjust the log directory as needed
+            project_root = Path(__file__).resolve().parent.parents[2]
             log_dir = project_root / 'logs' / 'Utilities'
             log_dir.mkdir(parents=True, exist_ok=True)
             file_handler = logging.FileHandler(log_dir / f"{log_name}.log")
@@ -376,31 +385,3 @@ class ConfigManager:
             logger.addHandler(file_handler)
 
         return logger
-
-def setup_logging(script_name: str, log_dir: Path, max_log_size: int = 5 * 1024 * 1024, backup_count: int = 3) -> logging.Logger:
-    logger = logging.getLogger(script_name)
-    logger.setLevel(logging.DEBUG)
-
-    if not logger.handlers:
-        # Ensure log directory exists
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        # File handler
-        log_file = log_dir / f"{script_name}.log"
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(logging.DEBUG)
-
-        # Console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-
-        # Formatter
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
-        console_handler.setFormatter(formatter)
-
-        # Add handlers to logger
-        logger.addHandler(file_handler)
-        logger.addHandler(console_handler)
-
-    return logger

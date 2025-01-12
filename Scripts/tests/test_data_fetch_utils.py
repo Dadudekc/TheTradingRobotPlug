@@ -9,6 +9,85 @@ from aioresponses import aioresponses
 import aiohttp
 import numpy as np
 import os
+from aiohttp import ClientSession  # Import ClientSession
+from Scripts.Utilities.data_fetch_utils import DataFetchUtils
+from pandas.errors import ParserError
+
+@pytest.mark.asyncio
+async def test_fetch_data_invalid_date_format(data_fetch_utils_fixture):
+    """
+    Test fetch_data_for_multiple_symbols with invalid date format.
+    """
+    symbols = ['AAPL']
+    start_date = 'invalid_date'
+    end_date = '2023-01-31'
+    data_sources = ["Alpha Vantage"]
+
+    with pytest.raises(ValueError, match="Invalid date format"):
+        await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+            symbols,
+            data_sources,
+            start_date,
+            end_date,
+            interval='1d'
+        )
+
+@pytest.mark.parametrize("missing_key,expect_error,expected_warning", [
+    ("FINNHUB_API_KEY", False, "FINNHUB_API_KEY is not set in environment variables. Finnhub features may fail."),
+    ("NEWSAPI_API_KEY", True, "Missing NewsAPI key."),
+])
+def test_data_fetch_utils_init_missing_keys(monkeypatch, missing_key, expect_error, expected_warning):
+    env_vars = {"NEWSAPI_API_KEY": "test_newsapi_key", "FINNHUB_API_KEY": "test_finnhub_key"}
+    if missing_key:
+        env_vars.pop(missing_key, None)
+
+    with patch.dict(os.environ, env_vars, clear=True):
+        mock_logger = MagicMock()
+        if expect_error:
+            with pytest.raises(EnvironmentError, match="Missing NewsAPI key."):
+                DataFetchUtils(logger=mock_logger)
+            mock_logger.error.assert_called_with("NEWSAPI_API_KEY is not set in environment variables.")
+        else:
+            DataFetchUtils(logger=mock_logger)
+            mock_logger.warning.assert_any_call(expected_warning)
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_for_multiple_symbols_integration(data_fetch_utils_fixture):
+    symbols = ['AAPL', 'GOOGL']
+    data_sources = ["Alpha Vantage", "Polygon", "NewsAPI"]
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    with aioresponses() as mocked:
+        for symbol in symbols:
+            mocked.get(
+                re.compile(rf"https://.*alphavantage.*symbol={symbol}.*"),
+                payload={"Time Series (Daily)": {"2023-01-03": {"1. open": "130.0", "2. high": "132.0"}}},
+                status=200
+            )
+            mocked.get(
+                re.compile(rf"https://.*polygon.*{symbol}.*"),
+                payload={"results": [{"t": 1672531200000, "o": 130.0}]},
+                status=200
+            )
+
+        with patch('requests.get') as mock_get:
+            mock_get.return_value.json.return_value = {
+                'status': 'ok',
+                'articles': [
+                    {'publishedAt': '2023-04-14T12:34:56Z', 'title': 'Title 1', 'description': 'Desc 1'},
+                    {'publishedAt': '2023-04-15T08:20:00Z', 'title': 'Title 2', 'description': 'Desc 2'}
+                ]
+            }
+
+            result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+                symbols, data_sources, start_date, end_date, interval
+            )
+
+    # Assert data for NewsAPI
+    assert len(result['AAPL']['NewsAPI']) == 2
 
 @pytest.mark.asyncio
 async def test_fetch_data_for_multiple_symbols(data_fetch_utils_fixture):
@@ -2291,3 +2370,194 @@ async def test_fetch_yahoo_finance_data_unsupported_interval(data_fetch_utils_fi
     assert result.empty, "Expected an empty DataFrame when an invalid interval is used."
 
 
+@pytest.mark.asyncio
+async def test_fetch_data_for_multiple_symbols_overlap(data_fetch_utils_fixture):
+    symbols = ['AAPL']
+    data_sources = ["Alpha Vantage", "Polygon"]
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    # Mock data for Alpha Vantage
+    mock_alpha_vantage_data = {
+        "Time Series (Daily)": {
+            "2023-01-03": {
+                "1. open": "130.0",
+                "2. high": "132.0",
+                "3. low": "129.0",
+                "4. close": "131.0",
+                "5. volume": "1000000"
+            }
+        }
+    }
+
+    # Mock data for Polygon
+    mock_polygon_data = {
+        "results": [
+            {
+                "t": 1672531200000,  # Corresponds to 2023-01-01 in milliseconds
+                "o": 130.0,
+                "h": 132.0,
+                "l": 129.0,
+                "c": 131.0,
+                "v": 1000000
+            }
+        ]
+    }
+
+    expected_polygon_df = pd.DataFrame({
+        'date': [pd.to_datetime('2023-01-01')],
+        'open': [130.0],
+        'high': [132.0],
+        'low': [129.0],
+        'close': [131.0],
+        'volume': [1000000]
+    }).set_index('date')
+
+    with aioresponses() as mocked:
+        # Mock Alpha Vantage API response
+        mocked.get(
+            re.compile(r"https://www\.alphavantage\.co/query\?.*"),
+            payload=mock_alpha_vantage_data,
+            status=200
+        )
+
+        # Mock Polygon API response
+        mocked.get(
+            re.compile(r"https://api\.polygon\.io/v2/aggs/ticker/.*"),
+            payload=mock_polygon_data,
+            status=200
+        )
+
+        # Call the function under test
+        result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+            symbols, data_sources, start_date, end_date, interval
+        )
+
+        # Debugging Output
+        print("Test Result: ", result)
+
+    # Convert result['AAPL']['Polygon'].index to DatetimeIndex
+    result['AAPL']['Polygon'].index = pd.to_datetime(result['AAPL']['Polygon'].index)
+
+    # Assertions
+    assert 'AAPL' in result, "Expected symbol AAPL in result."
+    assert 'Alpha Vantage' in result['AAPL'], "Expected Alpha Vantage data for AAPL."
+    assert 'Polygon' in result['AAPL'], "Expected Polygon data for AAPL."
+
+    # Validate Polygon DataFrame
+    pd.testing.assert_frame_equal(
+        result['AAPL']['Polygon'], expected_polygon_df, check_dtype=False
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_with_retries_empty_response(data_fetch_utils_fixture):
+    """
+    Test fetch_with_retries with an empty API response.
+    """
+    url = "https://example.com/empty-response"
+    with patch.object(ClientSession, "get", return_value=None):
+        async with ClientSession() as session:
+            result = await data_fetch_utils_fixture.fetch_with_retries(url, {}, session, retries=3)
+    assert result is None, "Expected None for empty API response."
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_for_multiple_symbols_overlap(data_fetch_utils_fixture):
+    symbols = ['AAPL']
+    data_sources = ["Alpha Vantage", "Polygon"]
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    # Mock data for Alpha Vantage
+    mock_alpha_vantage_data = {
+        "Time Series (Daily)": {
+            "2023-01-03": {
+                "1. open": "130.0",
+                "2. high": "132.0",
+                "3. low": "129.0",
+                "4. close": "131.0",
+                "5. volume": "1000000"
+            }
+        }
+    }
+
+    # Mock data for Polygon
+    mock_polygon_data = {
+        "results": [
+            {
+                "t": 1672531200000,  # Corresponds to 2023-01-01 in milliseconds
+                "o": 130.0,
+                "h": 132.0,
+                "l": 129.0,
+                "c": 131.0,
+                "v": 1000000
+            }
+        ]
+    }
+
+    expected_polygon_df = pd.DataFrame({
+        'open': [130.0],
+        'high': [132.0],
+        'low': [129.0],
+        'close': [131.0],
+        'volume': [1000000]
+    }, index=pd.to_datetime(['2023-01-01'])).rename_axis('date')  # Use Timestamp index
+
+    with aioresponses() as mocked:
+        # Mock Alpha Vantage API response
+        mocked.get(
+            re.compile(r"https://www\.alphavantage\.co/query\?.*"),
+            payload=mock_alpha_vantage_data,
+            status=200
+        )
+
+        # Mock Polygon API response
+        mocked.get(
+            re.compile(r"https://api\.polygon\.io/v2/aggs/ticker/.*"),
+            payload=mock_polygon_data,
+            status=200
+        )
+
+        # Call the function under test
+        result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+            symbols, data_sources, start_date, end_date, interval
+        )
+
+        # Debugging Output
+        print("Test Result: ", result)
+
+    # Convert result['AAPL']['Polygon'].index to DatetimeIndex
+    result['AAPL']['Polygon'].index = pd.to_datetime(result['AAPL']['Polygon'].index)
+
+    # Assertions
+    assert 'AAPL' in result, "Expected symbol AAPL in result."
+    assert 'Alpha Vantage' in result['AAPL'], "Expected Alpha Vantage data for AAPL."
+    assert 'Polygon' in result['AAPL'], "Expected Polygon data for AAPL."
+
+    # Validate Polygon DataFrame
+    pd.testing.assert_frame_equal(
+        result['AAPL']['Polygon'], expected_polygon_df, check_dtype=False
+    )
+
+@pytest.mark.asyncio
+async def test_fetch_data_for_multiple_symbols_empty_symbols(data_fetch_utils_fixture):
+    """
+    Test fetch_data_for_multiple_symbols with an empty symbols list.
+    """
+    symbols = []
+    data_sources = ["Alpha Vantage"]
+    start_date = '2023-01-01'
+    end_date = '2023-01-31'
+    interval = '1d'
+
+    with pytest.raises(ValueError, match="Symbols list cannot be empty."):
+        await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
+            symbols,
+            data_sources,
+            start_date,
+            end_date,
+            interval
+        )

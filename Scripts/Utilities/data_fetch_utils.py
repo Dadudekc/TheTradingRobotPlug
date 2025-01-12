@@ -104,28 +104,68 @@ class DataFetchUtils:
         - Alpaca (handled via initialize_alpaca)
         """
         self.logger = logger or logging.getLogger('DataFetchUtils')
+        self.logger.info("Initializing DataFetchUtils...")
 
-        # Finnhub API key
-        self.finnhub_api_key = os.getenv('FINNHUB_API_KEY')
-        if not self.finnhub_api_key:
-            self.logger.warning("FINNHUB_API_KEY is not set in environment variables. Finnhub features may fail.")
+        # Initialize API keys
+        self.finnhub_api_key = self._initialize_finnhub()
+        self.news_api_key = self._initialize_newsapi()
 
-        # NewsAPI key
-        self.news_api_key = os.getenv('NEWSAPI_API_KEY')
-        if not self.news_api_key:
+        # Initialize Alpaca API client
+        self.alpaca_api = self._initialize_alpaca()
+
+        self.logger.info("DataFetchUtils initialization complete.")
+
+    def _initialize_finnhub(self) -> Optional[str]:
+        """
+        Initialize Finnhub API key from environment variables.
+
+        Returns:
+            str: Finnhub API key if available, otherwise None.
+        """
+        finnhub_api_key = os.getenv('FINNHUB_API_KEY')
+        if not finnhub_api_key:
+            self.logger.warning(
+                "FINNHUB_API_KEY is not set in environment variables. Finnhub features may fail."
+            )
+            return None
+        self.logger.info("Finnhub API key loaded successfully.")
+        return finnhub_api_key
+
+    def _initialize_newsapi(self) -> str:
+        """
+        Initialize NewsAPI key from environment variables.
+
+        Returns:
+            str: NewsAPI key if available.
+
+        Raises:
+            EnvironmentError: If the NewsAPI key is missing.
+        """
+        news_api_key = os.getenv('NEWSAPI_API_KEY')
+        if not news_api_key:
             self.logger.error("NEWSAPI_API_KEY is not set in environment variables.")
             raise EnvironmentError("Missing NewsAPI key.")
+        self.logger.info("NewsAPI key loaded successfully.")
+        return news_api_key
 
-        # Alpaca API client
+    def _initialize_alpaca(self) -> Optional[Any]:
+        """
+        Initialize Alpaca API client using environment variables.
+
+        Returns:
+            Any: Alpaca API client instance if successfully initialized, otherwise None.
+        """
         try:
-            self.alpaca_api = initialize_alpaca()
-            if self.alpaca_api:
+            alpaca_api = initialize_alpaca()
+            if alpaca_api:
                 self.logger.info("Alpaca API client initialized successfully.")
+                return alpaca_api
             else:
                 self.logger.warning("Alpaca API client could not be initialized.")
+                return None
         except EnvironmentError as e:
             self.logger.error(f"Alpaca API initialization failed: {e}")
-            self.alpaca_api = None
+            return None
 
     # -------------------------------------------------------------------
     # Fetch with Retries
@@ -348,7 +388,6 @@ class DataFetchUtils:
     # -------------------------------------------------------------------
     # Fetch Data for Multiple Symbols
     # -------------------------------------------------------------------
-
     async def fetch_data_for_multiple_symbols(
         self,
         symbols: List[str],
@@ -356,7 +395,8 @@ class DataFetchUtils:
         start_date: str = "2023-01-01",
         end_date: Optional[str] = None,
         interval: str = "1d",
-        max_concurrent_tasks: int = 5
+        max_concurrent_tasks: int = 5,
+        session: Optional[aiohttp.ClientSession] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetches data for multiple stock symbols from various data sources.
@@ -368,44 +408,68 @@ class DataFetchUtils:
             end_date (Optional[str]): End date for data fetching (YYYY-MM-DD). Defaults to today.
             interval (str): Data interval (e.g., '1d', '1m').
             max_concurrent_tasks (int): Maximum number of concurrent tasks.
+            session (aiohttp.ClientSession, optional): Reusable aiohttp session. If None, a new session is created.
 
         Returns:
             Dict[str, Dict[str, Any]]: Nested dictionary with data for each symbol and data source.
         """
         end_date = end_date or datetime.now().strftime('%Y-%m-%d')
-        start_date = pd.to_datetime(start_date).strftime('%Y-%m-%d')
-        end_date = pd.to_datetime(end_date).strftime('%Y-%m-%d')
-        all_data = {}
-        alpaca_interval = "1Day" if interval == "1d" else interval
+        
+        try:
+            start_date = pd.to_datetime(start_date).strftime('%Y-%m-%d')
+            end_date = pd.to_datetime(end_date).strftime('%Y-%m-%d')
+        except ValueError as e:
+            self.logger.error(f"Invalid date format: {e}")
+            raise ValueError("Invalid date format. Ensure dates are in YYYY-MM-DD format.") from e
 
-        # Validate inputs
+        supported_sources = {"Alpaca", "Alpha Vantage", "Polygon", "Yahoo Finance", "Finnhub", "NewsAPI"}
+        unsupported_sources = set(data_sources) - supported_sources
+        if unsupported_sources:
+            self.logger.error(f"Unsupported data sources provided: {unsupported_sources}")
+            raise ValueError(f"Unsupported data source(s): {', '.join(unsupported_sources)}. Supported sources: {', '.join(supported_sources)}.")
+
         if not symbols:
             self.logger.error("No symbols provided for data fetching.")
             raise ValueError("Symbols list cannot be empty.")
-        if not set(data_sources).issubset({"Alpaca", "Alpha Vantage", "Polygon", "Yahoo Finance", "Finnhub", "NewsAPI"}):
-            self.logger.error(f"Unsupported data sources provided: {data_sources}")
-            raise ValueError("Unsupported data source(s).")
 
-        # Semaphore to limit concurrency
+        interval_mapping = {
+            "1d": "1Day",
+            "1m": "1Min",
+            "5m": "5Min",
+            "15m": "15Min"
+        }
+        alpaca_interval = interval_mapping.get(interval, interval)
+
+        if max_concurrent_tasks < 1:
+            self.logger.warning("max_concurrent_tasks is less than 1. Setting it to 1.")
+            max_concurrent_tasks = 1
+
         semaphore = asyncio.Semaphore(max_concurrent_tasks)
+        external_session = session is not None
+        if not external_session:
+            session = aiohttp.ClientSession()
 
         async def fetch_symbol_data(symbol):
             async with semaphore:
                 try:
-                    return await self._fetch_data_for_symbol(symbol, data_sources, start_date, end_date, alpaca_interval, session)
+                    data = await self._fetch_data_for_symbol(symbol, data_sources, start_date, end_date, alpaca_interval, session)
+                    self.logger.info(f"Successfully fetched data for {symbol}.")
+                    return data
                 except Exception as e:
                     self.logger.error(f"Error fetching data for {symbol}: {e}")
                     return {source: None for source in data_sources}
 
-        async with aiohttp.ClientSession() as session:
+        self.logger.info(f"Starting to fetch data for {len(symbols)} symbols from {data_sources}.")
+        try:
             tasks = [fetch_symbol_data(symbol) for symbol in symbols]
             results = await asyncio.gather(*tasks)
+        finally:
+            if not external_session:
+                await session.close()
 
-        for symbol, symbol_data in zip(symbols, results):
-            all_data[symbol] = symbol_data
-
+        all_data = {symbol: data for symbol, data in zip(symbols, results)}
+        self.logger.info("Data fetching completed.")
         return all_data
-
 
     async def _fetch_data_for_symbol(self, symbol: str, data_sources: List[str], start_date: str, end_date: str, interval: str, session: ClientSession) -> Dict[str, Any]:
         """
