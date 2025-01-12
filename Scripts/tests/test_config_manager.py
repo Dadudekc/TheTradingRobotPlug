@@ -430,3 +430,26 @@ def test_load_yaml_with_malformed_file(mock_logger, temp_config_files, project_r
     
     mock_logger.error.assert_called_once()
     assert "Error loading" in mock_logger.error.call_args[0][0]
+
+def test_invalid_env_file(mock_logger, project_root):
+    """Test ConfigManager initialization with invalid .env file."""
+    invalid_env_path = project_root / "non_existent.env"
+    manager = ConfigManager(env_file=invalid_env_path, logger=mock_logger, project_root=project_root)
+    mock_logger.warning.assert_called_with(f"No .env file found at {invalid_env_path}. Environment variables will be used as-is.")
+
+def test_get_missing_key_with_strict_keys(mock_logger, temp_config_files, project_root):
+    """Test missing key retrieval with strict_keys=True."""
+    manager = ConfigManager(
+        config_files=[temp_config_files["yaml"]],
+        logger=mock_logger,
+        project_root=project_root,
+        strict_keys=True
+    )
+    with pytest.raises(ValueError, match="Configuration for 'DATABASE.MISSING_KEY' is required but not provided."):
+        manager.get("database.missing_key", required=True)
+
+def test_get_with_fallback_value(mock_logger, temp_config_files, project_root):
+    """Test fallback logic when default is provided."""
+    manager = ConfigManager(config_files=[temp_config_files["yaml"]], logger=mock_logger, project_root=project_root)
+    value = manager.get("non.existent.key", default="fallback_value")
+    assert value == "fallback_value"
