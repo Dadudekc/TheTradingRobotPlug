@@ -391,3 +391,42 @@ def test_get_db_urls_missing_config(mock_logger, temp_config_files, project_root
     # Now no "DATABASE_HOST" anywhere, so it should raise:
     with pytest.raises(ValueError, match="Configuration for 'DATABASE.HOST' is required but not provided."):
         manager.get_db_url()
+
+def test_get_with_invalid_type(mock_logger, temp_config_files, project_root):
+    manager = ConfigManager(
+        config_files=[temp_config_files["yaml"]],
+        logger=mock_logger,
+        project_root=project_root
+    )
+
+    with pytest.raises(TypeError, match="Failed to cast config key 'DATABASE.USER' to <class 'dict'>"):
+        manager.get("database.user", value_type=dict)
+
+def test_str_to_bool(mock_logger, project_root):
+    manager = ConfigManager(logger=mock_logger, project_root=project_root)
+
+    assert manager._str_to_bool("true") is True
+    assert manager._str_to_bool("false") is False
+    assert manager._str_to_bool(1) is True
+    assert manager._str_to_bool(0) is False
+
+    with pytest.raises(ValueError, match="Cannot convert maybe to bool"):
+        manager._str_to_bool("maybe")
+
+def test_load_yaml_with_malformed_file(mock_logger, temp_config_files, project_root):
+    malformed_yaml = temp_config_files["yaml"]
+    malformed_yaml.write_text("database: {user: unbalanced_braces")
+
+    manager = ConfigManager(config_files=[malformed_yaml], logger=mock_logger, project_root=project_root)
+    
+    mock_logger.error.assert_called_once()
+    assert "Error loading" in mock_logger.error.call_args[0][0]
+
+def test_load_yaml_with_malformed_file(mock_logger, temp_config_files, project_root):
+    malformed_yaml = temp_config_files["yaml"]
+    malformed_yaml.write_text("database: {user: unbalanced_braces")
+
+    manager = ConfigManager(config_files=[malformed_yaml], logger=mock_logger, project_root=project_root)
+    
+    mock_logger.error.assert_called_once()
+    assert "Error loading" in mock_logger.error.call_args[0][0]
