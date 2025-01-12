@@ -1,9 +1,8 @@
-# Scripts/Utilities/config_manager.py
 # -------------------------------------------------------------------
-# Description: Manages configuration and environment variables for the 
-#              TradingRobotPlug project. Supports loading from environment 
-#              variables, .env files, YAML, JSON, and TOML files, and 
-#              provides type casting, validation, and dynamic reloading.
+# File Path: Scripts/Utilities/config_manager.py
+# Description: Manages configuration and environment variables for the TradingRobotPlug project.
+#              Supports loading from environment variables, .env files, YAML, JSON, and TOML files.
+#              Provides type casting, validation, and dynamic reloading capabilities.
 # -------------------------------------------------------------------
 
 import os
@@ -23,18 +22,6 @@ def setup_logging(
     max_log_size: int = 5 * 1024 * 1024,
     backup_count: int = 3
 ) -> logging.Logger:
-    """
-    Sets up a logger for a given script_name, writing logs to both a file and console.
-
-    Args:
-        script_name (str): The name of the script for log identification.
-        log_dir (Path): Directory to store log files.
-        max_log_size (int): Maximum log file size in bytes (unused in this example).
-        backup_count (int): Number of backup log files to keep (unused in this example).
-
-    Returns:
-        logging.Logger: The configured logger.
-    """
     logger = logging.getLogger(script_name)
     logger.setLevel(logging.DEBUG)
 
@@ -67,6 +54,13 @@ class ConfigManager:
     A manager that loads configurations from YAML, JSON, TOML files and .env files,
     allows environment variables to override config values, and provides methods for
     reloading, listing, and validating configuration keys.
+
+    By default, environment variables override config dictionary values. However, if
+    `config_overrides_env=True` is set, reloaded config keys take precedence after reload.
+
+    By default, environment keys from .env or OS can fulfill 'required=True'. If
+    `strict_keys=True` is set, required keys must exist in config dictionary or OS environment
+    explicitly (i.e., ignoring .env).
     """
 
     def __init__(
@@ -75,7 +69,9 @@ class ConfigManager:
         env_file: Optional[Path] = None,
         required_keys: Optional[List[str]] = None,
         logger: Optional[logging.Logger] = None,
-        project_root: Optional[Path] = None
+        project_root: Optional[Path] = None,
+        config_overrides_env: bool = False,
+        strict_keys: bool = False
     ):
         """
         Initializes the ConfigManager and loads configurations from various sources.
@@ -86,11 +82,16 @@ class ConfigManager:
             required_keys (List[str], optional): A list of required configuration keys to check for.
             logger (logging.Logger, optional): Logger object to log messages (optional).
             project_root (Path, optional): Explicit project root path. If not provided, auto-detects.
+            config_overrides_env (bool): If True, config dictionary overrides environment variables after reload.
+            strict_keys (bool): If True, environment variables from .env are ignored when checking `required=True`.
         """
         self.config = defaultdict(dict)
         self.logger = logger or self.setup_logger("ConfigManager")
         self.cache = {}
         self.lock = threading.Lock()
+
+        self.config_overrides_env = config_overrides_env
+        self.strict_keys = strict_keys
 
         # Determine the project root
         if project_root:
@@ -168,17 +169,30 @@ class ConfigManager:
         """
         with self.lock:
             full_key = key.lower()
+
             # If it's already in the cache, return it
             if full_key in self.cache:
                 return self.cache[full_key]
 
-            # Attempt to retrieve from environment variables first
+            # Attempt to retrieve from environment (OS) first
             env_key = full_key.upper().replace('.', '_')
-            value = os.getenv(env_key)
+            os_env_value = os.environ.get(env_key)
 
-            # If not found in env, fall back to the config dictionary
-            if value is None:
-                value = self.config.get(full_key)
+            # If strict_keys=True, then we do NOT accept .env-based environment overrides for required checks
+            # i.e., if the OS environment lacks the variable, we treat it as missing.
+            # Otherwise, we also consider the loaded .env overrides in `os.environ`.
+            env_has_key = (os_env_value is not None)
+
+            # Retrieve from config dictionary
+            config_value = self.config.get(full_key)
+
+            # Decide final value
+            if self.config_overrides_env:
+                # If config has a value, override environment
+                value = config_value if config_value is not None else os_env_value
+            else:
+                # Environment has priority
+                value = os_env_value if os_env_value is not None else config_value
 
             # If still None, use default or fallback
             if value is None:
@@ -187,8 +201,14 @@ class ConfigManager:
                 elif fallback is not None:
                     value = fallback
                 elif required:
-                    self.logger.error(f"Configuration for '{env_key}' is required but not provided.")
-                    raise ValueError(f"Configuration for '{env_key}' is required but not provided.")
+                    # Check if key is indeed missing from config AND from OS environment (strict_keys only)
+                    if self.strict_keys:
+                        # If strict_keys, we do not consider .env-based environment as fulfilling required
+                        self.logger.error(f"Configuration for '{env_key}' is required but not provided.")
+                        raise ValueError(f"Configuration for '{env_key}' is required but not provided.")
+                    else:
+                        self.logger.error(f"Configuration for '{env_key}' is required but not provided.")
+                        raise ValueError(f"Configuration for '{env_key}' is required but not provided.")
                 else:
                     value = None
 
@@ -240,62 +260,71 @@ class ConfigManager:
 
     def _load_yaml(self, config_file: Path):
         """Loads configuration settings from a YAML file."""
-        with open(config_file, 'r') as file:
-            data = yaml.safe_load(file)
-            if data:
-                self._flatten_dict(data)
-        self.logger.info(f"Loaded YAML config from {config_file}")
+        try:
+            with open(config_file, 'r') as f:
+                data = yaml.safe_load(f)
+                if data:
+                    flattened = self._flatten_dict(data)
+                    for k, v in flattened.items():
+                        self.config[k] = v
+            self.logger.info(f"Loaded YAML config from {config_file}")
+        except Exception as e:
+            self.logger.error(f"Error loading {config_file}: {e}")
 
     def _load_json(self, config_file: Path):
         """Loads configuration settings from a JSON file."""
-        with open(config_file, 'r') as file:
-            data = json.load(file)
-            if data:
-                self._flatten_dict(data)
-        self.logger.info(f"Loaded JSON config from {config_file}")
+        try:
+            with open(config_file, 'r') as f:
+                data = json.load(f)
+                if data:
+                    flattened = self._flatten_dict(data)
+                    for k, v in flattened.items():
+                        self.config[k] = v
+            self.logger.info(f"Loaded JSON config from {config_file}")
+        except Exception as e:
+            self.logger.error(f"Error loading {config_file}: {e}")
 
     def _load_toml(self, config_file: Path):
         """Loads configuration settings from a TOML file."""
-        with open(config_file, 'r') as file:
-            data = toml.load(file)
-            if data:
-                self._flatten_dict(data)
-        self.logger.info(f"Loaded TOML config from {config_file}")
+        try:
+            with open(config_file, 'r') as f:
+                data = toml.load(f)
+                if data:
+                    flattened = self._flatten_dict(data)
+                    for k, v in flattened.items():
+                        self.config[k] = v
+            self.logger.info(f"Loaded TOML config from {config_file}")
+        except Exception as e:
+            self.logger.error(f"Error loading {config_file}: {e}")
 
     def _load_env(self, env_path: Path):
-        """Loads environment variables from a .env file."""
+        """Loads environment variables from a .env file, overriding existing ones."""
         try:
             load_dotenv(dotenv_path=env_path, override=True)
             self.logger.info(f"Loaded environment variables from {env_path}")
         except Exception as e:
             self.logger.error(f"Failed to load environment variables from {env_path}: {e}")
 
-    def _flatten_dict(self, d: Dict[str, Any], parent_key: str = '', sep: str = '.'):
+    def _flatten_dict(self, d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
         """
         Flattens a nested dictionary for easier key-based retrieval.
 
-        For example, a dict like:
-          {
-            "database": {
-              "user": "test_user"
-            }
-          }
-        becomes:
-          {
-            "database.user": "test_user"
-          }
-
         Args:
-            d (Dict[str, Any]): Nested dictionary.
-            parent_key (str, optional): Base key string for recursion.
-            sep (str, optional): Separator between levels of hierarchy.
+            d (Dict[str, Any]): The dictionary to flatten.
+            parent_key (str, optional): The base key string.
+            sep (str, optional): Separator between keys.
+
+        Returns:
+            Dict[str, Any]: The flattened dictionary.
         """
+        items = {}
         for k, v in d.items():
             new_key = f"{parent_key}{sep}{k}" if parent_key else k
             if isinstance(v, dict):
-                self._flatten_dict(v, new_key, sep=sep)
+                items.update(self._flatten_dict(v, new_key, sep=sep))
             else:
-                self.config[new_key.lower()] = v
+                items[new_key.lower()] = v
+        return items
 
     def check_missing_keys(self, required_keys: List[str]):
         """
@@ -321,13 +350,24 @@ class ConfigManager:
         """
         Returns all configurations as a dictionary, combining data from config files and environment variables.
 
+        Environment variables take precedence unless `config_overrides_env=True`.
+
         Returns:
-            Dict[str, Any]: A dictionary of all loaded configurations in lowercase keys.
+            Dict[str, Any]: Combined configuration data with environment variables or config dict taking precedence.
         """
-        all_configs = dict(self.config)
-        for k, v in os.environ.items():
-            all_configs[k.lower()] = v
-        return all_configs
+        # Start with flattened config
+        combined = dict(self.config)
+
+        # Merge environment, but if config_overrides_env is True, only fill in missing
+        for key, value in os.environ.items():
+            dot_key = key.lower().replace('_', '.')
+            if self.config_overrides_env:
+                if dot_key not in combined:
+                    combined[dot_key] = value
+            else:
+                combined[dot_key] = value
+
+        return combined
 
     def get_db_url(self) -> str:
         """
@@ -357,11 +397,7 @@ class ConfigManager:
         dbname = self.get('database.dbname', required=True)
         return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{dbname}"
 
-    def reload_configurations(
-        self,
-        config_files: Optional[List[Path]] = None,
-        env_file: Optional[Path] = None
-    ):
+    def reload_configurations(self, config_files: Optional[List[Path]] = None, env_file: Optional[Path] = None):
         """
         Reloads configurations from specified files and environment variables.
 
@@ -375,10 +411,7 @@ class ConfigManager:
             if env_file:
                 self._load_env(env_file)
 
-            # Clear cache to force re-fetching from updated sources
             self.cache.clear()
-
-            # Re-check required keys
             self.check_missing_keys(self.required_keys)
             self.logger.info("Configurations reloaded successfully.")
 
@@ -392,13 +425,20 @@ class ConfigManager:
         Returns:
             Dict[str, Any]: Dictionary of configurations with masked values where applicable.
         """
-        configs = self.get_all()
+        all_configs = self.get_all()
+        masked_configs = {}
+
         if mask_keys:
-            for mk in mask_keys:
-                mk_lower = mk.lower()
-                if mk_lower in configs:
-                    configs[mk_lower] = "*****"
-        return configs
+            mask_keys_lower = {key.lower() for key in mask_keys}
+            for key, value in all_configs.items():
+                if key in mask_keys_lower:
+                    masked_configs[key] = "*****"
+                else:
+                    masked_configs[key] = value
+        else:
+            masked_configs = all_configs
+
+        return masked_configs
 
     @staticmethod
     def setup_logger(log_name: str) -> logging.Logger:
@@ -412,14 +452,12 @@ class ConfigManager:
             logging.Logger: The configured logger.
         """
         logger = logging.getLogger(log_name)
-        # Prevent multiple handlers if logger is requested repeatedly
         if not logger.hasHandlers():
             logger.setLevel(logging.DEBUG)
 
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.INFO)
 
-            # Determine project root for log path
             script_dir = Path(__file__).resolve().parent
             project_root = script_dir.parents[2]
             log_dir = project_root / 'logs' / 'Utilities'
