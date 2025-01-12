@@ -478,3 +478,66 @@ def test_config_manager_no_files(mock_logger, project_root):
     # Check if the warning is logged
     warnings = [call.args[0] for call in mock_logger.warning.call_args_list]
     assert any("No .env file found at" in warning for warning in warnings)
+
+def test_malformed_toml(mock_logger, temp_config_files, project_root):
+    malformed_toml = temp_config_files["toml"]
+    malformed_toml.write_text("database = { user = 'missing_quote }")
+    manager = ConfigManager(config_files=[malformed_toml], logger=mock_logger, project_root=project_root)
+    
+    mock_logger.error.assert_called_once()
+    assert "Error loading" in mock_logger.error.call_args[0][0]
+
+def test_config_overrides_env(mock_logger, temp_config_files, project_root):
+    manager = ConfigManager(
+        config_files=[temp_config_files["yaml"]],
+        env_file=temp_config_files["env"],
+        logger=mock_logger,
+        project_root=project_root,
+        config_overrides_env=True
+    )
+    assert manager.get("database.user") == "test_user"
+
+def test_missing_keys_with_strict(mock_logger, temp_config_files, project_root):
+    # Remove DATABASE_HOST from .env
+    no_host_env_content = """
+    DATABASE_USER=env_user
+    DATABASE_PASSWORD=env_pass
+    DATABASE_PORT=6543
+    DATABASE_DBNAME=env_db
+    FEATURES_TARGET=close
+    DEBUG_MODE=true
+    """
+    temp_config_files["env"].write_text(no_host_env_content)
+
+    # Remove DATABASE_HOST from YAML
+    no_host_yaml_content = """
+    database:
+      user: test_user
+      password: test_pass
+      port: 5432
+      dbname: test_db
+    features:
+      feature_list: open,high,low,close,volume
+      target: close
+    debug_mode: true
+    """
+    temp_config_files["yaml"].write_text(no_host_yaml_content)
+
+    # Remove DATABASE_HOST from the OS environment
+    os.environ.pop("DATABASE_HOST", None)
+
+    # Reload environment to ensure DATABASE_HOST is gone
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=temp_config_files["env"], override=True)
+
+    manager = ConfigManager(
+        config_files=[temp_config_files["yaml"]],
+        env_file=temp_config_files["env"],
+        logger=mock_logger,
+        project_root=project_root,
+        strict_keys=True
+    )
+
+    # Assert ValueError is raised for missing 'DATABASE.HOST'
+    with pytest.raises(ValueError, match="Configuration for 'DATABASE.HOST' is required but not provided."):
+        manager.get("database.host", required=True)

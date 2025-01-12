@@ -201,12 +201,14 @@ class ConfigManager:
                 elif fallback is not None:
                     value = fallback
                 elif required:
-                    # Check if key is indeed missing from config AND from OS environment (strict_keys only)
+                    # Handle strict_keys logic
                     if self.strict_keys:
-                        # If strict_keys, we do not consider .env-based environment as fulfilling required
-                        self.logger.error(f"Configuration for '{env_key}' is required but not provided.")
-                        raise ValueError(f"Configuration for '{env_key}' is required but not provided.")
+                        # Check if key exists explicitly in the OS environment or configuration dictionary
+                        if not env_has_key and config_value is None:
+                            self.logger.error(f"Configuration for '{env_key}' is required but not provided.")
+                            raise ValueError(f"Configuration for '{env_key}' is required but not provided.")
                     else:
+                        # .env or OS environment fulfills the requirement
                         self.logger.error(f"Configuration for '{env_key}' is required but not provided.")
                         raise ValueError(f"Configuration for '{env_key}' is required but not provided.")
                 else:
