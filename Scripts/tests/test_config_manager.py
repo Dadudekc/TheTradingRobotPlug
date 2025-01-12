@@ -453,3 +453,33 @@ def test_get_with_fallback_value(mock_logger, temp_config_files, project_root):
     manager = ConfigManager(config_files=[temp_config_files["yaml"]], logger=mock_logger, project_root=project_root)
     value = manager.get("non.existent.key", default="fallback_value")
     assert value == "fallback_value"
+
+def test_flatten_dict(mock_logger, project_root):
+    """Test the _flatten_dict method with nested dictionaries."""
+    nested_dict = {
+        "level1": {
+            "level2": {
+                "level3": {
+                    "key": "value"
+                }
+            },
+            "another_key": "value2"
+        }
+    }
+    manager = ConfigManager(logger=mock_logger, project_root=project_root)
+    flattened = manager._flatten_dict(nested_dict)
+    assert flattened == {
+        "level1.level2.level3.key": "value",
+        "level1.another_key": "value2"
+    }
+
+def test_check_missing_keys(mock_logger, temp_config_files, project_root):
+    """Test for missing keys detection."""
+    required_keys = ["database.user", "database.password", "database.missing_key"]
+    manager = ConfigManager(
+        config_files=[temp_config_files["yaml"]],
+        logger=mock_logger,
+        project_root=project_root
+    )
+    with pytest.raises(KeyError, match="Missing required configuration keys: DATABASE.MISSING_KEY"):
+        manager.check_missing_keys(required_keys)
