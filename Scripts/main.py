@@ -2,10 +2,10 @@
 
 import asyncio
 import logging
-from Utilities.data_fetch_utils import DataFetchUtils
+from Scripts.Utilities.data_fetch_utils import DataFetchUtils
 import aiohttp
 
-from Utilities.config_manager import ConfigManager  # If needed
+from Scripts.Utilities.config_manager import ConfigManager  # If needed
 
 class StockDataAgent:
     """
