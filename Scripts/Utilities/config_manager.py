@@ -15,41 +15,7 @@ from collections import defaultdict
 import logging
 from typing import Any, Optional, List, Dict, Union, Type, Callable
 import threading
-
-
-def setup_logging(
-    script_name: str,
-    log_dir: Path,
-    max_log_size: int = 5 * 1024 * 1024,
-    backup_count: int = 3
-) -> logging.Logger:
-    logger = logging.getLogger(script_name)
-    logger.setLevel(logging.DEBUG)
-
-    if not logger.handlers:
-        # Ensure log directory exists
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        # File handler
-        log_file = log_dir / f"{script_name}.log"
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(logging.DEBUG)
-
-        # Console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-
-        # Formatter
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
-        console_handler.setFormatter(formatter)
-
-        # Add handlers to logger
-        logger.addHandler(file_handler)
-        logger.addHandler(console_handler)
-
-    return logger
-
+from Scripts.Utilities.shared_utils import setup_logging
 
 class ConfigManager:
     """

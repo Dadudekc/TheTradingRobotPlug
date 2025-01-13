@@ -17,11 +17,7 @@ from datetime import datetime
 import numpy as np
 from urllib.parse import urlparse
 from datetime import timezone
-try:
-    from config_manager import setup_logging  # When running the script directly
-except ImportError:
-    from Scripts.Utilities.config_manager import setup_logging  # When the script is imported as a module
-
+from .shared_utils import setup_logging
 
 # -------------------------------------------------------------------
 # Locate and load environment
@@ -49,7 +45,7 @@ load_dotenv(dotenv_path=ENV_PATH)
 # -------------------------------------------------------------------
 
 LOGGER = setup_logging(
-    script_name="data_fetch_utils",
+    log_name="data_fetch_utils",
     log_dir=PROJECT_ROOT / 'logs',
     max_log_size=5 * 1024 * 1024,
     backup_count=3
