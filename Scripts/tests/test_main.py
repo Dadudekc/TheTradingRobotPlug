@@ -1,7 +1,28 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 import pandas as pd
-from Scripts.main import StockDataAgent
+from Scripts.main import main, StockDataAgent
+
+@pytest.mark.asyncio
+async def test_main_function():
+    # Mock StockDataAgent methods
+    with patch("Scripts.main.StockDataAgent") as MockAgent:
+        mock_agent = MockAgent.return_value
+        mock_agent.get_real_time_quote = AsyncMock(return_value={"current_price": 150.0})
+        mock_agent.get_historical_data = AsyncMock(return_value=[{"date": "2023-01-01", "price": 140.0}])
+        mock_agent.get_historical_data_alpha_vantage = AsyncMock(return_value=[{"date": "2023-01-01", "price": 141.0}])
+        mock_agent.get_news = AsyncMock(return_value=[{"headline": "Stock news"}])
+        mock_agent.get_combined_data = AsyncMock(return_value={"symbol": "AAPL", "data": "combined_data"})
+
+        # Run the main function
+        await main()
+
+        # Verify that all methods were called
+        mock_agent.get_real_time_quote.assert_called_once_with("AAPL")
+        mock_agent.get_historical_data.assert_called_once_with("AAPL", "2023-01-01", "2023-12-31")
+        mock_agent.get_historical_data_alpha_vantage.assert_called_once_with("AAPL", "2023-01-01", "2023-12-31")
+        mock_agent.get_news.assert_called_once_with("AAPL")
+        mock_agent.get_combined_data.assert_called_once_with("AAPL", "2023-01-01", "2023-12-31")
 
 @pytest.mark.asyncio
 async def test_main():
@@ -48,3 +69,15 @@ async def test_main():
         # Test historical data from Alpha Vantage
         historical_data_alpha = await agent.get_historical_data_alpha_vantage("AAPL", "2023-01-01", "2023-12-31")
         assert historical_data_alpha.to_dict(orient="records") == [{"date": "2023-01-01", "price": 141.0}]
+
+@pytest.mark.asyncio
+async def test_get_real_time_quote_exception():
+    with patch("Scripts.main.DataFetchUtils") as MockFetcher:
+        mock_fetcher = MockFetcher.return_value
+        mock_fetcher.fetch_finnhub_quote = AsyncMock(side_effect=Exception("API error"))
+
+        agent = StockDataAgent()
+        result = await agent.get_real_time_quote("AAPL")
+
+        # Expect an empty dictionary on exception
+        assert result == {}
