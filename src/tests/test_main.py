@@ -1,12 +1,12 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 import pandas as pd
-from Scripts.main import main, StockDataAgent
+from src.main import main, StockDataAgent
 
 @pytest.mark.asyncio
 async def test_main_function():
     # Mock StockDataAgent methods
-    with patch("Scripts.main.StockDataAgent") as MockAgent:
+    with patch("src.main.StockDataAgent") as MockAgent:
         mock_agent = MockAgent.return_value
         mock_agent.get_real_time_quote = AsyncMock(return_value={"current_price": 150.0})
         mock_agent.get_historical_data = AsyncMock(return_value=[{"date": "2023-01-01", "price": 140.0}])
@@ -27,7 +27,7 @@ async def test_main_function():
 @pytest.mark.asyncio
 async def test_main():
     # Mock the DataFetchUtils methods called in StockDataAgent
-    with patch("Scripts.main.DataFetchUtils") as MockFetcher:  # Ensure the patch path matches the import in StockDataAgent
+    with patch("src.main.DataFetchUtils") as MockFetcher:  # Ensure the patch path matches the import in StockDataAgent
         # Create mock methods for the fetcher
         mock_fetcher = MockFetcher.return_value
         mock_fetcher.fetch_finnhub_quote = AsyncMock(return_value=pd.DataFrame([{
@@ -72,7 +72,7 @@ async def test_main():
 
 @pytest.mark.asyncio
 async def test_get_real_time_quote_exception():
-    with patch("Scripts.main.DataFetchUtils") as MockFetcher:
+    with patch("src.main.DataFetchUtils") as MockFetcher:
         mock_fetcher = MockFetcher.return_value
         mock_fetcher.fetch_finnhub_quote = AsyncMock(side_effect=Exception("API error"))
 

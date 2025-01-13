@@ -1,11 +1,11 @@
-# Scripts/main.py
-
 import asyncio
 import logging
-from Scripts.Utilities.data_fetch_utils import DataFetchUtils
+from Utilities.data_fetch_utils import DataFetchUtils
 import aiohttp
 
-from Scripts.Utilities.config_manager import ConfigManager  # If needed
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("StockDataFetcher")
 
 class StockDataAgent:
     """
@@ -16,9 +16,6 @@ class StockDataAgent:
         self.fetcher = DataFetchUtils()
 
     async def get_real_time_quote(self, symbol: str) -> dict:
-        """
-        Fetch real-time quote for a given stock symbol.
-        """
         self.logger.info(f"Fetching real-time quote for {symbol}...")
         async with aiohttp.ClientSession() as session:
             try:
@@ -28,9 +25,6 @@ class StockDataAgent:
                 return {}
 
     async def get_historical_data(self, symbol: str, start_date: str, end_date: str, interval: str = "1Day") -> list:
-        """
-        Fetch historical data from Alpaca for a given stock symbol.
-        """
         self.logger.info(f"Fetching historical data for {symbol} from Alpaca...")
         try:
             return await self.fetcher.fetch_alpaca_data_async(symbol, start_date, end_date, interval=interval)
@@ -39,9 +33,6 @@ class StockDataAgent:
             return []
 
     async def get_historical_data_alpha_vantage(self, symbol: str, start_date: str, end_date: str) -> list:
-        """
-        Fetch historical data from Alpha Vantage for a given stock symbol.
-        """
         self.logger.info(f"Fetching historical data for {symbol} from Alpha Vantage...")
         async with aiohttp.ClientSession() as session:
             try:
@@ -51,9 +42,6 @@ class StockDataAgent:
                 return []
 
     async def get_news(self, symbol: str, page_size: int = 3) -> list:
-        """
-        Fetch recent news articles for a given stock symbol.
-        """
         self.logger.info(f"Fetching recent news articles for {symbol}...")
         try:
             return await self.fetcher.fetch_news_data_async(symbol, page_size=page_size)
@@ -62,9 +50,6 @@ class StockDataAgent:
             return []
 
     async def get_combined_data(self, symbol: str, start_date: str, end_date: str, interval: str = "1d") -> dict:
-        """
-        Fetch data from multiple sources for a given stock symbol.
-        """
         self.logger.info(f"Fetching combined data for {symbol} from multiple sources...")
         async with aiohttp.ClientSession() as session:
             try:
@@ -79,32 +64,42 @@ class StockDataAgent:
                 self.logger.error(f"Failed to fetch combined data for {symbol}: {e}")
                 return {}
 
-
-logging.basicConfig(level=logging.INFO)
-
-async def main():
+async def showcase_stock_data():
+    """
+    Demonstrates the full capabilities of the StockDataAgent.
+    """
     agent = StockDataAgent()
 
-    # Define stock and date range
+    # Define the stock symbol and date range
     symbol = "AAPL"
     start_date = "2023-01-01"
     end_date = "2023-12-31"
+    interval = "1Day"
 
-    # Fetch data
-    real_time_quote = await agent.get_real_time_quote(symbol)
-    logging.info(f"Real-Time Quote: {real_time_quote}")
+    # Showcase data fetching capabilities
+    try:
+        real_time_quote = await agent.get_real_time_quote(symbol)
+        logger.info(f"Showcase Real-Time Quote: {real_time_quote}")
 
-    historical_data = await agent.get_historical_data(symbol, start_date, end_date)
-    logging.info(f"Historical Data: {historical_data}")
+        historical_data = await agent.get_historical_data(symbol, start_date, end_date, interval)
+        logger.info(f"Showcase Historical Data from Alpaca: {historical_data}")
 
-    historical_data_alpha = await agent.get_historical_data_alpha_vantage(symbol, start_date, end_date)
-    logging.info(f"Historical Data from Alpha Vantage: {historical_data_alpha}")
+        historical_data_alpha = await agent.get_historical_data_alpha_vantage(symbol, start_date, end_date)
+        logger.info(f"Showcase Historical Data from Alpha Vantage: {historical_data_alpha}")
 
-    news = await agent.get_news(symbol)
-    logging.info(f"Recent News: {news}")
+        news = await agent.get_news(symbol)
+        logger.info(f"Showcase Recent News: {news}")
 
-    combined_data = await agent.get_combined_data(symbol, start_date, end_date)
-    logging.info(f"Combined Data: {combined_data}")
+        combined_data = await agent.get_combined_data(symbol, start_date, end_date)
+        logger.info(f"Showcase Combined Data: {combined_data}")
+    except Exception as e:
+        logger.error(f"An error occurred during the showcase: {e}")
+
+def run():
+    """
+    Entry point for the script, wrapping the asyncio event loop.
+    """
+    asyncio.run(showcase_stock_data())
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    run()

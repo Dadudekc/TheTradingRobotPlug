@@ -15,7 +15,7 @@ from collections import defaultdict
 import logging
 from typing import Any, Optional, List, Dict, Union, Type, Callable
 import threading
-from Scripts.Utilities.shared_utils import setup_logging
+from src.Utilities.shared_utils import setup_logging
 
 class ConfigManager:
     """
