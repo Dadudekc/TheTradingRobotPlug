@@ -1,4 +1,4 @@
-# Scripts/tests/conftest.py
+# src/tests/conftest.py
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -14,7 +14,7 @@ def data_fetch_utils_fixture(monkeypatch):
     monkeypatch.setenv("NEWSAPI_API_KEY", "test_newsapi_key")
 
     # Mock logging
-    with patch("Scripts.Utilities.config_manager.setup_logging") as mock_logging:
+    with patch("src.Utilities.config_manager.setup_logging") as mock_logging:
         mock_logger = MagicMock()
         mock_logging.return_value = mock_logger
 

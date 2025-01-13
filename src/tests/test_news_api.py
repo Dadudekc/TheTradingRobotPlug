@@ -33,7 +33,7 @@ async def test_fetch_news_data_async_success(data_fetch_utils_fixture):
         ]
     }
 
-    with patch('requests.get') as mock_get, patch('Scripts.Utilities.data_fetch_utils.TextBlob') as mock_textblob:
+    with patch('requests.get') as mock_get, patch('src.Utilities.data_fetch_utils.TextBlob') as mock_textblob:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = mock_response
@@ -93,7 +93,7 @@ async def test_fetch_news_data_async_missing_fields(data_fetch_utils_fixture):
         ]
     }
 
-    with patch('requests.get') as mock_get, patch('Scripts.Utilities.data_fetch_utils.TextBlob') as mock_textblob:
+    with patch('requests.get') as mock_get, patch('src.Utilities.data_fetch_utils.TextBlob') as mock_textblob:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = mock_response

@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------
-# File Path: Scripts/Utilities/config_manager.py
+# File Path: src/Utilities/config_manager.py
 # Description: Manages configuration and environment variables for the TradingRobotPlug project.
 #              Supports loading from environment variables, .env files, YAML, JSON, and TOML files.
 #              Provides type casting, validation, and dynamic reloading capabilities.

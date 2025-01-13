@@ -7,10 +7,12 @@ import aiohttp
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("StockDataFetcher")
 
+
 class StockDataAgent:
     """
     Agent interface for fetching stock data from multiple sources.
     """
+
     def __init__(self):
         self.logger = logging.getLogger("StockDataAgent")
         self.fetcher = DataFetchUtils()
@@ -58,23 +60,18 @@ class StockDataAgent:
                     data_sources=["Alpaca", "Alpha Vantage", "Finnhub", "NewsAPI"],
                     start_date=start_date,
                     end_date=end_date,
-                    interval=interval
+                    interval=interval,
                 )
             except Exception as e:
                 self.logger.error(f"Failed to fetch combined data for {symbol}: {e}")
                 return {}
 
-async def showcase_stock_data():
+
+async def showcase_stock_data(symbol="AAPL", start_date="2023-01-01", end_date="2023-12-31", interval="1Day"):
     """
     Demonstrates the full capabilities of the StockDataAgent.
     """
     agent = StockDataAgent()
-
-    # Define the stock symbol and date range
-    symbol = "AAPL"
-    start_date = "2023-01-01"
-    end_date = "2023-12-31"
-    interval = "1Day"
 
     # Showcase data fetching capabilities
     try:
@@ -87,19 +84,22 @@ async def showcase_stock_data():
         historical_data_alpha = await agent.get_historical_data_alpha_vantage(symbol, start_date, end_date)
         logger.info(f"Showcase Historical Data from Alpha Vantage: {historical_data_alpha}")
 
-        news = await agent.get_news(symbol)
+        news = await agent.get_news(symbol, page_size=3)
         logger.info(f"Showcase Recent News: {news}")
 
-        combined_data = await agent.get_combined_data(symbol, start_date, end_date)
+        # Include `interval` explicitly
+        combined_data = await agent.get_combined_data(symbol, start_date, end_date, interval)
         logger.info(f"Showcase Combined Data: {combined_data}")
     except Exception as e:
         logger.error(f"An error occurred during the showcase: {e}")
+
 
 def run():
     """
     Entry point for the script, wrapping the asyncio event loop.
     """
     asyncio.run(showcase_stock_data())
+
 
 if __name__ == "__main__":
     run()

@@ -43,7 +43,7 @@ def test_get_project_root_failure(monkeypatch):
     from pathlib import Path
 
     # Simulate no .env file found
-    monkeypatch.setattr('Scripts.Utilities.data_fetch_utils.Path.exists', lambda _: False)
+    monkeypatch.setattr('src.Utilities.data_fetch_utils.Path.exists', lambda _: False)
 
     with pytest.raises(RuntimeError, match="Project root not found. Ensure .env file exists at the project root."):
         get_project_root()
