@@ -77,3 +77,5 @@ $RECYCLE.BIN/
 *.iws
 .vscode/
 Tradingrobotplug2/
+data/
+config/
