@@ -80,3 +80,5 @@ Tradingrobotplug2/
 data/
 config/
 src\Data_Processing\data
+logs/
+models/
