@@ -4,7 +4,7 @@ test_config_and_setup.py
 Contains tests for configuration, environment variables,
 logger setup, Alpaca initialization, and related setup logic.
 """
-
+from pathlib import Path
 import pytest
 import os
 from unittest.mock import patch, MagicMock

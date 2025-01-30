@@ -4,7 +4,7 @@ test_finnhub.py
 Contains tests specifically for Finnhub data fetching,
 including quotes, metrics, and related error cases.
 """
-
+from pathlib import Path
 import pytest
 import re
 import aiohttp

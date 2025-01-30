@@ -5,7 +5,7 @@ Contains integration tests involving multiple data sources
 (Alpha Vantage, Polygon, Finnhub, NewsAPI) and/or complex
 multi-symbol logic in a single call.
 """
-
+from pathlib import Path
 import pytest
 import re
 import pandas as pd

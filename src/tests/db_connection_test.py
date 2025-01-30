@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 import os
 
@@ -16,5 +16,5 @@ engine = create_engine(connection_string)
 
 # Test connection
 with engine.connect() as connection:
-    result = connection.execute("SELECT 1")
+    result = connection.execute(text("SELECT 1"))
     print("Connection test result:", [row for row in result])

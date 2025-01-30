@@ -4,7 +4,7 @@ test_news_api.py
 Contains tests for fetching and parsing news data via NewsAPI,
 including sentiment analysis and edge cases.
 """
-
+from pathlib import Path
 import pytest
 import re
 import os

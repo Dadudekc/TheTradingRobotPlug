@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, patch
 import pandas as pd
 from src.main import showcase_stock_data, StockDataAgent
-
+from pathlib import Path
 
 @pytest.mark.asyncio
 async def test_main_function():

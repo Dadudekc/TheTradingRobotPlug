@@ -4,7 +4,7 @@ test_polygon.py
 Contains tests specifically for the Polygon API, including
 data fetching, malformed responses, and timestamp parsing.
 """
-
+from pathlib import Path
 import pytest
 import re
 import aiohttp
