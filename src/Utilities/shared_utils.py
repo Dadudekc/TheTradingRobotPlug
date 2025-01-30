@@ -1,5 +1,5 @@
 import logging
-from pathlib import Path
+from pathlib import Path  # Add this import
 
 def setup_logging(
     script_name: str,
@@ -8,7 +8,8 @@ def setup_logging(
     backup_count: int = 3,
     console_log_level: int = logging.INFO,
     file_log_level: int = logging.DEBUG,
-    feedback_loop_enabled: bool = False
+    feedback_loop_enabled: bool = False,
+    log_level: int = logging.INFO  # Add this parameter
 ) -> logging.Logger:
     """
     Sets up a logger with console and file handlers, including optional feedback loop integration.
@@ -21,11 +22,13 @@ def setup_logging(
         console_log_level (int): Logging level for the console handler. Defaults to logging.INFO.
         file_log_level (int): Logging level for the file handler. Defaults to logging.DEBUG.
         feedback_loop_enabled (bool): Placeholder for integrating feedback mechanisms. Defaults to False.
+        log_level (int): Overall logging level for the logger. Defaults to logging.INFO.
 
     Returns:
         logging.Logger: Configured logger instance.
     """
     logger = logging.getLogger(script_name)
+    logger.setLevel(log_level)  # Use the log_level parameter
 
     # Avoid duplicate handlers
     if not logger.hasHandlers():
@@ -62,3 +65,4 @@ def setup_logging(
         logger.debug("Feedback loop is enabled.")
 
     return logger
+

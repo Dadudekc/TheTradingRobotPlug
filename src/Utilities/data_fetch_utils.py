@@ -1,4 +1,8 @@
-# src/Utilities/data_fetch_utils.py
+# -------------------------------------------------------------------
+# File: data_fetch_utils.py
+# Location: src/Utilities
+# Description: Utilities for fetching stock data from various sources.
+# -------------------------------------------------------------------
 
 import os
 import pandas as pd
@@ -13,11 +17,8 @@ import logging
 import requests
 from textblob import TextBlob
 import yfinance as yf
-from datetime import datetime
-import numpy as np
-from urllib.parse import urlparse
-from datetime import timezone
-from .shared_utils import setup_logging
+from datetime import datetime, timezone
+from .shared_utils import setup_logging  # Ensure this exists or adjust accordingly
 
 # -------------------------------------------------------------------
 # Locate and load environment
@@ -44,18 +45,11 @@ load_dotenv(dotenv_path=ENV_PATH)
 # Logging Setup
 # -------------------------------------------------------------------
 
-LOGGER = setup_logging(
-    log_name="data_fetch_utils",
-    log_dir=PROJECT_ROOT / 'logs',
-    max_log_size=5 * 1024 * 1024,
-    backup_count=3
-)
+LOGGER = setup_logging(script_name="data_fetch_utils", log_level=logging.INFO)
 
 # -------------------------------------------------------------------
 # Initialize Alpaca
 # -------------------------------------------------------------------
-
-LOGGER = logging.getLogger(__name__)
 
 def initialize_alpaca() -> Optional[tradeapi.REST]:
     """
@@ -71,7 +65,7 @@ def initialize_alpaca() -> Optional[tradeapi.REST]:
         return None
 
     # Validate the base URL
-    parsed_url = urlparse(base_url)
+    parsed_url = requests.utils.urlparse(base_url)
     if not parsed_url.scheme or not parsed_url.netloc:
         raise ValueError(f"Invalid URL: {base_url}")
 
@@ -84,7 +78,6 @@ try:
 except ValueError as e:
     LOGGER.error(f"Failed to initialize Alpaca client: {e}")
     ALPACA_CLIENT = None
-
 
 # -------------------------------------------------------------------
 # DataFetchUtils Class
@@ -246,10 +239,10 @@ class DataFetchUtils:
     # -------------------------------------------------------------------
 
     def get_stock_data(self, 
-                    ticker: str, 
-                    start_date: str = "2022-01-01", 
-                    end_date: Optional[str] = None, 
-                    interval: str = "1d") -> pd.DataFrame:
+                      ticker: str, 
+                      start_date: str = "2022-01-01", 
+                      end_date: Optional[str] = None, 
+                      interval: str = "1d") -> pd.DataFrame:
         """
         Fetches historical stock data using yfinance, expecting a lowercase 'date' after reset_index().
         """
@@ -264,7 +257,7 @@ class DataFetchUtils:
             rename_dict = {col: col.lower().replace(' ', '_') for col in data.columns}
             data.rename(columns=rename_dict, inplace=True)
 
-            # Convert 'date' to date objects
+            # Convert 'date' to datetime objects
             if 'date' in data.columns:
                 data['date'] = pd.to_datetime(data['date']).dt.date
             else:
@@ -281,12 +274,11 @@ class DataFetchUtils:
             self.logger.error(f"Error fetching stock data for {ticker}: {e}")
             return pd.DataFrame()
 
-
     async def fetch_stock_data_async(self, 
-                                    ticker: str, 
-                                    start_date: str = "2022-01-01", 
-                                    end_date: Optional[str] = None, 
-                                    interval: str = "1d") -> pd.DataFrame:
+                                     ticker: str, 
+                                     start_date: str = "2022-01-01", 
+                                     end_date: Optional[str] = None, 
+                                     interval: str = "1d") -> pd.DataFrame:
         """
         Async wrapper for get_stock_data.
         """
@@ -298,9 +290,9 @@ class DataFetchUtils:
     # -------------------------------------------------------------------
 
     async def fetch_alpaca_data_async(self, symbol: str, 
-                                    start_date: str, 
-                                    end_date: str, 
-                                    interval: str = "1Day") -> pd.DataFrame:
+                                     start_date: str, 
+                                     end_date: str, 
+                                     interval: str = "1Day") -> pd.DataFrame:
         """
         Fetches historical data from Alpaca, ensuring 'date' is the index.
         """
@@ -387,12 +379,12 @@ class DataFetchUtils:
     async def fetch_data_for_multiple_symbols(
         self,
         symbols: List[str],
-        data_sources: List[str] = ["Alpaca", "Alpha Vantage", "Polygon", "Yahoo Finance", "Finnhub", "NewsAPI"],
+        data_sources: List[str] = ["Alpaca", "Yahoo Finance", "Finnhub", "NewsAPI"],
         start_date: str = "2023-01-01",
         end_date: Optional[str] = None,
         interval: str = "1d",
         max_concurrent_tasks: int = 5,
-        session: Optional[aiohttp.ClientSession] = None
+        session: Optional[ClientSession] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetches data for multiple stock symbols from various data sources.
@@ -404,7 +396,7 @@ class DataFetchUtils:
             end_date (Optional[str]): End date for data fetching (YYYY-MM-DD). Defaults to today.
             interval (str): Data interval (e.g., '1d', '1m').
             max_concurrent_tasks (int): Maximum number of concurrent tasks.
-            session (aiohttp.ClientSession, optional): Reusable aiohttp session. If None, a new session is created.
+            session (ClientSession, optional): Reusable aiohttp session. If None, a new session is created.
 
         Returns:
             Dict[str, Dict[str, Any]]: Nested dictionary with data for each symbol and data source.
@@ -418,7 +410,7 @@ class DataFetchUtils:
             self.logger.error(f"Invalid date format: {e}")
             raise ValueError("Invalid date format. Ensure dates are in YYYY-MM-DD format.") from e
 
-        supported_sources = {"Alpaca", "Alpha Vantage", "Polygon", "Yahoo Finance", "Finnhub", "NewsAPI"}
+        supported_sources = {"Alpaca", "Yahoo Finance", "Finnhub", "NewsAPI"}
         unsupported_sources = set(data_sources) - supported_sources
         if unsupported_sources:
             self.logger.error(f"Unsupported data sources provided: {unsupported_sources}")
@@ -427,14 +419,6 @@ class DataFetchUtils:
         if not symbols:
             self.logger.error("No symbols provided for data fetching.")
             raise ValueError("Symbols list cannot be empty.")
-
-        interval_mapping = {
-            "1d": "1Day",
-            "1m": "1Min",
-            "5m": "5Min",
-            "15m": "15Min"
-        }
-        alpaca_interval = interval_mapping.get(interval, interval)
 
         if max_concurrent_tasks < 1:
             self.logger.warning("max_concurrent_tasks is less than 1. Setting it to 1.")
@@ -448,7 +432,7 @@ class DataFetchUtils:
         async def fetch_symbol_data(symbol):
             async with semaphore:
                 try:
-                    data = await self._fetch_data_for_symbol(symbol, data_sources, start_date, end_date, alpaca_interval, session)
+                    data = await self._fetch_data_for_symbol(symbol, data_sources, start_date, end_date, interval, session)
                     self.logger.info(f"Successfully fetched data for {symbol}.")
                     return data
                 except Exception as e:
@@ -485,20 +469,6 @@ class DataFetchUtils:
                 symbol_data["Alpaca"] = alpaca_data
             except Exception as e:
                 self.logger.error(f"Alpaca data fetch failed for {symbol}: {e}")
-
-        if "Alpha Vantage" in data_sources:
-            try:
-                alphavantage_data = await self.fetch_alphavantage_data(symbol, session, start_date, end_date)
-                symbol_data["Alpha Vantage"] = alphavantage_data
-            except Exception as e:
-                self.logger.error(f"Alpha Vantage data fetch failed for {symbol}: {e}")
-
-        if "Polygon" in data_sources:
-            try:
-                polygon_data = await self.fetch_polygon_data(symbol, session, start_date, end_date)
-                symbol_data["Polygon"] = polygon_data
-            except Exception as e:
-                self.logger.error(f"Polygon data fetch failed for {symbol}: {e}")
 
         if "Yahoo Finance" in data_sources:
             try:
@@ -580,6 +550,15 @@ class DataFetchUtils:
     async def fetch_polygon_data(self, symbol: str, session: ClientSession, start_date: str, end_date: str) -> pd.DataFrame:
         """
         Fetches historical data for a symbol from Polygon.
+
+        Args:
+            symbol (str): The stock symbol to fetch data for.
+            session (ClientSession): The aiohttp session for making requests.
+            start_date (str): Start date for data fetching.
+            end_date (str): End date for data fetching.
+
+        Returns:
+            pd.DataFrame: A DataFrame containing the parsed historical data.
         """
         api_key = os.getenv('POLYGONIO_API_KEY')
         if not api_key:
@@ -588,7 +567,7 @@ class DataFetchUtils:
 
         url = (
             f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/"
-            f"{start_date}/{end_date}?adjusted=true&apiKey={api_key}"
+            f"{start_date}/{end_date}?adjusted=true&sort=asc&limit=10000&apiKey={api_key}"
         )
         data = await self.fetch_with_retries(url, headers={}, session=session)
         return self._parse_polygon_data(data)
@@ -600,6 +579,12 @@ class DataFetchUtils:
     def _parse_alphavantage_data(self, data: Optional[Dict[str, Any]]) -> pd.DataFrame:
         """
         Parses Alpha Vantage data into a pandas DataFrame.
+
+        Args:
+            data (Dict[str, Any]): Raw JSON data from Alpha Vantage.
+
+        Returns:
+            pd.DataFrame: Parsed DataFrame with standardized columns.
         """
         if not data:
             self.logger.error("No data received for parsing.")
@@ -633,6 +618,12 @@ class DataFetchUtils:
     def _parse_polygon_data(self, data: Dict[str, Any]) -> pd.DataFrame:
         """
         Parses Polygon.io data into a pandas DataFrame.
+
+        Args:
+            data (Dict[str, Any]): Raw JSON data from Polygon.io.
+
+        Returns:
+            pd.DataFrame: Parsed DataFrame with standardized columns.
         """
         results = data.get("results", [])
         if not results:
@@ -662,7 +653,6 @@ class DataFetchUtils:
         df.set_index('date', inplace=True)
         return df
 
-
     # -------------------------------------------------------------------
     # Fetch Finnhub Metrics
     # -------------------------------------------------------------------
@@ -670,6 +660,13 @@ class DataFetchUtils:
     async def fetch_finnhub_metrics(self, symbol: str, session: ClientSession) -> pd.DataFrame:
         """
         Fetches financial metrics from Finnhub.
+
+        Args:
+            symbol (str): The stock symbol to fetch metrics for.
+            session (ClientSession): The aiohttp session for making requests.
+
+        Returns:
+            pd.DataFrame: Parsed DataFrame with financial metrics.
         """
         if not self.finnhub_api_key:
             self.logger.error("Finnhub API key is not set. Cannot fetch metrics.")
@@ -688,6 +685,12 @@ class DataFetchUtils:
     def _parse_finnhub_metrics_data(self, data: Dict[str, Any]) -> pd.DataFrame:
         """
         Parses Finnhub metrics data into a pandas DataFrame.
+
+        Args:
+            data (Dict[str, Any]): Raw JSON data from Finnhub.
+
+        Returns:
+            pd.DataFrame: Parsed DataFrame with standardized columns.
         """
         self.logger.debug(f"Raw Finnhub data received: {data}")
 
@@ -713,3 +716,4 @@ class DataFetchUtils:
     # -------------------------------------------------------------------
 
     # Add any additional helper methods as needed, such as parsing methods for other APIs.
+
