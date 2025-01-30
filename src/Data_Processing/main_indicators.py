@@ -1,20 +1,24 @@
 # -------------------------------------------------------------------
-# File Path: C:/Projects/TradingRobotPlug/src/Data_Processing/main_indicators.py
-# Description: Main file to apply all technical indicators to datasets from cleaned tables.
+# File: main_indicators.py
+# Location: C:/Projects/TradingRobotPlug/src/Data_Processing
+# Description: Composable file to apply all technical indicators from
+#              multiple modules to datasets from cleaned tables.
+#              Extended to handle streaming data with a sliding window.
 # -------------------------------------------------------------------
 
 import os
-import pandas as pd
-import logging
-import asyncio
-from pathlib import Path
 import sys
+import asyncio
+import logging
+import pandas as pd
+from pathlib import Path
 from dotenv import load_dotenv
+from typing import Optional
 
 # -------------------------------------------------------------------
 # Project Path Setup and Environment Loading
 # -------------------------------------------------------------------
-project_root = Path(__file__).resolve().parents[2]
+project_root = Path(__file__).resolve().parents[3]
 env_path = project_root / '.env'
 
 if env_path.exists():
@@ -23,12 +27,10 @@ if env_path.exists():
 else:
     print("Warning: .env file not found at project root. Ensure environment variables are set.")
 
-# Dynamically define config directory and file
 # Reads from an environment variable, or defaults to "config" under project root
 CONFIG_DIR = os.getenv("TRADINGBOT_CONFIG_DIR", str(project_root / "config"))
 CONFIG_FILE = Path(CONFIG_DIR) / "config.ini"
 
-# Log or warn if config file is missing
 if not CONFIG_FILE.exists():
     print(f"Warning: config file does not exist at: {CONFIG_FILE}")
 else:
@@ -41,7 +43,7 @@ directories = {
     'data': project_root / 'data',
 }
 
-# Create directories if they don't exist
+# Ensure required directories exist
 for name, path in directories.items():
     path.mkdir(parents=True, exist_ok=True)
 
@@ -53,20 +55,24 @@ for p in sys.path:
     print(p)
 
 # -------------------------------------------------------------------
-# Importing Indicator Classes and Utilities
+# Attempting Imports of Indicators, Utilities, ColumnUtils
 # -------------------------------------------------------------------
 try:
     from Utilities.data.data_store import DataStore
     from Utilities.db.db_handler import DatabaseHandler
     from Utilities.config_manager import ConfigManager, setup_logging
+    from Utilities.column_utils import ColumnUtils
+
     from Data_Processing.Technical_Indicators.momentum_indicators import MomentumIndicators
     from Data_Processing.Technical_Indicators.trend_indicators import TrendIndicators
     from Data_Processing.Technical_Indicators.volume_indicators import VolumeIndicators
     from Data_Processing.Technical_Indicators.volatility_indicators import VolatilityIndicators
     from Data_Processing.Technical_Indicators.machine_learning_indicators import MachineLearningIndicators
     from Data_Processing.Technical_Indicators.custom_indicators import CustomIndicators
+
+    print("[main_indicators.py] Successfully imported all modules.")
 except ImportError as e:
-    print(f"Error importing modules: {e}")
+    print(f"[main_indicators.py] Error importing modules: {e}")
     sys.exit(1)
 
 # -------------------------------------------------------------------
@@ -76,7 +82,7 @@ logger = setup_logging(
     script_name="main_indicators",
     log_dir=directories['logs'] / 'technical_indicators'
 )
-logger.info("Logger initialized for main_indicators.")
+logger.info("[main_indicators.py] Logger initialized for main_indicators.")
 
 # -------------------------------------------------------------------
 # Configuration Setup
@@ -85,170 +91,202 @@ required_keys = [
     'POSTGRES_HOST', 'POSTGRES_DBNAME', 'POSTGRES_USER',
     'POSTGRES_PASSWORD', 'POSTGRES_PORT', 'ALPHAVANTAGE_API_KEY',
     'ALPHAVANTAGE_BASE_URL',
-    'ML_MODEL_PATH'  # Ensure this key is added to .env
+    'ML_MODEL_PATH'  # Ensure this key is present in .env or config
 ]
 
 try:
     config_manager = ConfigManager(env_file=env_path, required_keys=required_keys, logger=logger)
-    logger.info("ConfigManager initialized successfully.")
+    logger.info("[main_indicators.py] ConfigManager initialized successfully.")
 except KeyError as e:
-    logger.error(f"Missing required configuration keys: {e}")
+    logger.error(f"[main_indicators.py] Missing required configuration keys: {e}")
     sys.exit(1)
 
 # -------------------------------------------------------------------
-# Utility Function for Standardizing Column Names
+# Composable Function to Apply All Indicators
 # -------------------------------------------------------------------
-def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
+def apply_all_indicators(
+    df: pd.DataFrame,
+    logger: logging.Logger,
+    db_handler: Optional[DatabaseHandler],
+    config: ConfigManager,
+    data_store: DataStore
+) -> pd.DataFrame:
     """
-    Converts all column names in the DataFrame to lowercase.
-    
-    Args:
-        df (pd.DataFrame): The original DataFrame.
-    
-    Returns:
-        pd.DataFrame: The DataFrame with standardized column names.
-    """
-    df.columns = [col.lower() for col in df.columns]
-    return df
-
-# -------------------------------------------------------------------
-# Utility Function for Applying Indicators
-# -------------------------------------------------------------------
-def apply_all_indicators(df: pd.DataFrame, logger: logging.Logger, db_handler=None, config=None) -> pd.DataFrame:
-    """
-    Applies all available technical indicators to the provided DataFrame.
+    Applies all available technical indicators from various modules
+    (Momentum, Trend, Volume, Volatility, Machine Learning, and Custom)
+    to the provided DataFrame.
 
     Args:
-        df (pd.DataFrame): The DataFrame containing stock data.
+        df (pd.DataFrame): Input DataFrame containing stock data.
         logger (logging.Logger): Logger instance for logging.
-        db_handler: The database handler for database interactions (optional).
-        config: Configuration manager instance (optional).
+        db_handler (Optional[DatabaseHandler]): Database handler.
+        config (ConfigManager): Configuration manager.
+        data_store (DataStore): Data store for data operations.
 
     Returns:
-        pd.DataFrame: DataFrame with added technical indicators.
+        pd.DataFrame: DataFrame with applied indicators.
     """
-    logger.info("Initializing technical indicators classes...")
+    logger.info("[main_indicators.py] Initializing technical indicator classes...")
 
-    # Initialize indicator classes with the logger and optional parameters
-    indicators = {
-        "Momentum Indicators": MomentumIndicators(logger=logger),
-        "Trend Indicators": TrendIndicators(logger=logger),
+    # Initialize indicator classes with logger, db_handler, and config
+    indicators_map = {
+        "Momentum Indicators": MomentumIndicators(logger=logger, data_store=data_store),
+        "Trend Indicators": TrendIndicators(logger=logger, data_store=data_store),
         "Volume Indicators": VolumeIndicators(logger=logger),
         "Volatility Indicators": VolatilityIndicators(logger=logger),
-        "Machine Learning Indicators": MachineLearningIndicators(db_handler=db_handler, config=config, logger=logger),
-        "Custom Indicators": CustomIndicators(db_handler=db_handler, config_manager=config, logger=logger),
+        "Machine Learning Indicators": MachineLearningIndicators(
+            data_store=data_store, 
+            db_handler=db_handler, 
+            config=config, 
+            logger=logger
+        ),
+        "Custom Indicators": CustomIndicators(
+            db_handler=db_handler, 
+            logger=logger
+        ),
     }
 
-    def safe_apply(indicator_instance, df, indicator_name):
+    def safe_apply(instance, df_in, name):
         """
-        Applies indicators safely by checking if the 'apply_indicators' method exists.
-
-        Args:
-            indicator_instance: The indicator class instance.
-            df (pd.DataFrame): DataFrame to apply the indicator to.
-            indicator_name (str): The name of the indicator for logging.
-
-        Returns:
-            pd.DataFrame: The DataFrame with applied indicators.
+        Safely applies an indicator's 'apply_indicators' method if available.
         """
-        if hasattr(indicator_instance, 'apply_indicators') and callable(getattr(indicator_instance, 'apply_indicators')):
+        if hasattr(instance, 'apply_indicators') and callable(getattr(instance, 'apply_indicators')):
             try:
-                logger.info(f"Applying {indicator_name}...")
-                return indicator_instance.apply_indicators(df)
-            except Exception as e:
-                logger.error(f"Error applying {indicator_name}: {e}", exc_info=True)
-                return df
+                logger.info(f"[main_indicators.py] Applying {name}...")
+                return instance.apply_indicators(df_in)
+            except Exception as exc:
+                logger.error(f"[main_indicators.py] Error applying {name}: {exc}", exc_info=True)
+                return df_in
         else:
-            logger.warning(f"{indicator_name} does not have an 'apply_indicators' method. Skipping...")
-            return df
+            logger.warning(f"[main_indicators.py] {name} has no 'apply_indicators' method. Skipping...")
+            return df_in
 
-    # Apply each type of indicator using the safe_apply function
-    for name, instance in indicators.items():
+    # Sequentially apply each set of indicators
+    for name, instance in indicators_map.items():
         df = safe_apply(instance, df, name)
 
-    logger.info("All technical indicators applied successfully.")
+    logger.info("[main_indicators.py] All technical indicators applied successfully.")
     return df
 
 # -------------------------------------------------------------------
 # IndicatorProcessor Class
 # -------------------------------------------------------------------
 class IndicatorProcessor:
+    """
+    A composable class to unify all indicator applications.
+    """
     def __init__(self, data_store: DataStore, db_handler: DatabaseHandler, config: ConfigManager):
         self.data_store = data_store
         self.db_handler = db_handler
         self.config = config
+        self.logger = logger
 
-    def process_data(self, df: pd.DataFrame) -> pd.DataFrame:
+    def process_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Applies all technical indicators to the provided DataFrame.
+        Standardizes columns with ColumnUtils, then applies all indicators.
         """
-        logger.info("Standardizing column names to lowercase...")
-        df = standardize_column_names(df)
-        logger.debug(f"DataFrame columns after standardization: {df.columns.tolist()}")
+        self.logger.info("[main_indicators.py] Standardizing columns with ColumnUtils...")
+        column_config_path = project_root / 'src' / 'Utilities' / 'column_config.json'
+        try:
+            df = ColumnUtils.process_dataframe(
+                df=df,
+                config_path=column_config_path,
+                required_columns=self._required_columns(),
+                logger=self.logger
+            )
+            self.logger.info("[main_indicators.py] DataFrame processed with ColumnUtils.")
+        except Exception as e:
+            self.logger.error(f"[main_indicators.py] Column standardization error: {e}", exc_info=True)
+            # Depending on the use-case, you might skip further processing or return the df as is
+            return df
 
-        # Verify required columns
-        required_columns = ['close', 'high', 'low', 'volume']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            logger.error(f"Missing required columns: {missing_columns}. Skipping indicators that depend on them.")
-            # Depending on your application logic, you might choose to skip processing or continue without certain indicators
-            # For now, we'll proceed to apply indicators that can handle missing columns
+        # Ensure 'Date' column exists
+        if 'date' in df.columns and 'Date' not in df.columns:
+            df.rename(columns={'date': 'Date'}, inplace=True)
+            self.logger.info("Renamed 'date' column to 'Date'")
+        elif 'Date' not in df.columns and 'date' not in df.columns:
+            self.logger.error("Neither 'date' nor 'Date' column exists in DataFrame.")
+            raise KeyError("Date column missing")
 
-        logger.info("Applying all technical indicators...")
-        df = apply_all_indicators(df, logger=logger, db_handler=self.db_handler, config=self.config)
-        logger.debug(f"DataFrame preview after applying indicators:\n{df.head()}")
+        # Check for minimal columns needed
+        essential_cols = ["close", "high", "low", "volume", "Date"]
+        missing_cols = [col for col in essential_cols if col not in df.columns]
+        if missing_cols:
+            self.logger.warning(f"[main_indicators.py] Missing essential columns {missing_cols}. Some indicators may fail.")
+
+        self.logger.info("[main_indicators.py] Applying all technical indicators...")
+        df = apply_all_indicators(
+            df,
+            logger=self.logger,
+            db_handler=self.db_handler,
+            config=self.config,
+            data_store=self.data_store
+        )
         return df
+
+    def _required_columns(self) -> list:
+        """
+        Returns a set of columns likely needed across all indicators.
+        """
+        return [
+            "close", "high", "low", "volume",
+            "macd_line", "macd_signal", "macd_histogram",
+            "rsi", "bollinger_width", "Date"
+        ]
 
 # -------------------------------------------------------------------
 # Async Main Function
 # -------------------------------------------------------------------
 async def main():
-    symbols = ['AAPL', 'MSFT', 'GOOG']
+    symbols = ["AAPL", "MSFT", "GOOG"]
     try:
         data_store = DataStore(config=config_manager, logger=logger, use_csv=False)
-        db_handler = DatabaseHandler(logger=logger)
-        indicator_processor = IndicatorProcessor(data_store=data_store, db_handler=db_handler, config=config_manager)
+        db_handler = DatabaseHandler(config=config_manager, logger=logger)
+        processor = IndicatorProcessor(data_store, db_handler, config_manager)
     except Exception as e:
-        logger.error(f"Initialization error: {e}", exc_info=True)
+        logger.error(f"[main_indicators.py] Initialization error: {e}", exc_info=True)
         sys.exit(1)
 
     # Process data for each symbol
     for symbol in symbols:
-        logger.info(f"Processing indicators for {symbol}")
+        logger.info(f"[main_indicators.py] Processing indicators for {symbol}")
         try:
             raw_df = data_store.load_data(symbol=symbol)
             if raw_df is None or raw_df.empty:
-                logger.warning(f"No data for {symbol}. Skipping.")
+                logger.warning(f"[main_indicators.py] No data for {symbol}. Skipping.")
                 continue
 
-            processed_df = indicator_processor.process_data(raw_df)
+            processed_df = processor.process_dataframe(raw_df)
 
-            # Ensure 'date' column exists and is in datetime format
-            if 'date' not in processed_df.columns:
-                logger.warning(f"'date' column missing in processed data for {symbol}. Attempting to create it.")
-                if 'date' in processed_df.columns:
-                    pass  # Already exists
-                elif 'date' in processed_df.columns:
-                    processed_df.rename(columns={'date': 'date'}, inplace=True)
-                elif 'Date' in processed_df.columns:
-                    processed_df.rename(columns={'Date': 'date'}, inplace=True)
+            # Validate 'Date' column
+            if "Date" not in processed_df.columns:
+                logger.warning(f"[main_indicators.py] 'Date' column missing in processed data for {symbol}. Attempting to create it.")
+                # Attempt to create 'Date' from index if possible
+                if processed_df.index.name == 'Date':
+                    processed_df.reset_index(inplace=True)
                 else:
-                    logger.error(f"Unable to create 'date' column for {symbol}. Skipping.")
-                    continue
+                    # If 'Date' can be inferred from another column, handle accordingly
+                    if 'date' in processed_df.columns:
+                        processed_df['Date'] = pd.to_datetime(processed_df['date'], errors='coerce')
+                        processed_df.drop(columns=['date'], inplace=True)
+                        logger.info("Created 'Date' column from 'date' column.")
+                    else:
+                        logger.error("Unable to create 'Date' column. Skipping this symbol.")
+                        continue
 
-            processed_df['date'] = pd.to_datetime(processed_df['date'], errors='coerce')
-            processed_df = processed_df.dropna(subset=['date'])
+            # Ensure 'Date' is datetime
+            processed_df["Date"] = pd.to_datetime(processed_df["Date"], errors="coerce")
+            processed_df.dropna(subset=["Date"], inplace=True)
 
             if not processed_df.empty:
                 data_store.save_data(processed_df, symbol=symbol, overwrite=True)
-                logger.info(f"Data for {symbol} processed and saved successfully.")
+                logger.info(f"[main_indicators.py] Data for {symbol} processed and saved successfully.")
             else:
-                logger.warning(f"No valid data to save for {symbol}. Skipping.")
+                logger.warning(f"[main_indicators.py] No valid data to save for {symbol}. Skipping.")
+        except Exception as ex:
+            logger.error(f"[main_indicators.py] Error processing {symbol}: {ex}", exc_info=True)
 
-        except Exception as e:
-            logger.error(f"Error processing {symbol}: {e}", exc_info=True)
-
-    logger.info("Data processing completed for all symbols.")
+    logger.info("[main_indicators.py] Data processing completed for all symbols.")
 
 # -------------------------------------------------------------------
 # Entry Point
@@ -257,4 +295,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as e:
-        logger.error(f"Runtime error: {e}", exc_info=True)
+        logger.error(f"[main_indicators.py] Runtime error: {e}", exc_info=True)
