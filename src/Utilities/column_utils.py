@@ -5,6 +5,7 @@
 import pandas as pd
 import logging
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -33,25 +34,22 @@ class ColumnUtils:
 
     CONFIG_PATH = Path(__file__).parent / 'column_config.json'
 
-    @staticmethod
-    def load_column_mapping(config_path: Optional[Path] = None) -> dict:
-        """
-        Loads column mapping from a JSON configuration file.
-
-        Args:
-            config_path (Path, optional): Path to the JSON config file.
-
-        Returns:
-            dict: Column mapping dictionary.
-        """
-        config_path = config_path or ColumnUtils.CONFIG_PATH
-        if not config_path.exists():
-            raise FileNotFoundError(f"Column configuration file not found at {config_path}")
+    @classmethod
+    def load_column_mapping(cls, config_path):
+        if not os.path.exists(config_path):
+            # Log a warning and use default mappings
+            print(f"Warning: Column configuration file not found at {config_path}. Using default mappings.")
+            return {
+                "date": "Date",
+                "open": "Open",
+                "high": "High",
+                "low": "Low",
+                "close": "Close",
+                "volume": "Volume"
+            }
         
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-        
-        return config.get("standard_columns", ColumnUtils.DEFAULT_COLUMN_MAP)
+        with open(config_path, 'r') as file:
+            return json.load(file)
 
     @staticmethod
     def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:

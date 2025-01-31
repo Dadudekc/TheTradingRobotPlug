@@ -61,9 +61,9 @@ sys.path.extend([
 # -------------------------------------------------------------------
 # Import ConfigManager and Logging Setup Using Absolute Imports
 # -------------------------------------------------------------------
-from config_handling.config_manager import ConfigManager
-from config_handling.logging_setup import setup_logging
-from Utilities.utils.indicator_utils import apply_all_indicators
+from Utilities.config_manager import ConfigManager
+from Utilities.shared_utils import setup_logging
+from Data_Processing.main_indicators import apply_all_indicators
 
 # -------------------------------------------------------------------
 # Logger Configuration

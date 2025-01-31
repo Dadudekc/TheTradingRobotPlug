@@ -1,39 +1,30 @@
 # -------------------------------------------------------------------
-# File Path: C:/Projects/TradingRobotPlug/src/Utilities/db_inspect_and_transfer.py
-# Description: Script to inspect the SQLite database, verify its structure,
-#              add technical indicator columns, and migrate to PostgreSQL or MySQL.
-#              It uses SQLAlchemy for database interactions and pandas for data manipulation.
-#              Logging is set up to track the migration process.
-#
-# Example Usage:
-#     Simply run the script:
-#         python db_inspect_and_transfer.py
+# File Path: src/Utilities/db/db_inspect_and_transfer.py
+# Description: Handles SQLite database inspection, modification, and 
+#              migration to PostgreSQL/MySQL. Ensures schema integrity.
 # -------------------------------------------------------------------
 
 import os
 import sys
 import pandas as pd
 from pathlib import Path
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, text
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from dotenv import load_dotenv
+import logging
 
 # -------------------------------------------------------------------
 # Project Path Setup
 # -------------------------------------------------------------------
 script_dir = Path(__file__).resolve().parent
-project_root = script_dir.parents[2]  # Adjusted for the project structure
+project_root = script_dir.parents[2]
 utilities_dir = project_root / 'src' / 'Utilities'
-model_dir = project_root / 'SavedModels'
-model_utils = project_root / 'src' / 'model_training' / 'utils'
-data_processing_dir = project_root / 'src' / 'Data_Processing'
-sys.path.extend([str(utilities_dir), str(model_dir), str(model_utils), str(data_processing_dir)])
+sys.path.append(str(utilities_dir))
 
-# Import ConfigManager and logging setup
+# Import ConfigManager and Logging
 try:
-    from config_handling.config_manager import ConfigManager
-    from config_handling.logging_setup import setup_logging
+    from Utilities.config_manager import ConfigManager
+    from Utilities.shared_utils import setup_logging
 except ModuleNotFoundError as e:
     print(f"Error importing modules: {e}")
     sys.exit(1)
@@ -43,169 +34,151 @@ except ModuleNotFoundError as e:
 # -------------------------------------------------------------------
 env_path = project_root / '.env'
 load_dotenv(dotenv_path=env_path)
+
+# Logging Setup
 log_dir = project_root / 'logs' / 'Utilities'
 log_dir.mkdir(parents=True, exist_ok=True)
-logger = setup_logging(str(log_dir / 'db_inspect_and_transfer'))
+logger = logging.getLogger('db_inspect_and_transfer')
+logger.setLevel(logging.INFO)
+
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(filename)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 # -------------------------------------------------------------------
-# SQLAlchemy Base
+# DBInspectAndTransfer Class
 # -------------------------------------------------------------------
-Base = declarative_base()
+class DBInspectAndTransfer:
+    """Handles SQLite database inspection, schema modifications, and migration."""
 
-# Define SQLAlchemy Models
-class StockData(Base):
-    __tablename__ = 'stock_data'
-    id = Column(Integer, primary_key=True)
-    symbol = Column(String, index=True)
-    timestamp = Column(DateTime, index=True)
-    open = Column(Float)
-    high = Column(Float)
-    low = Column(Float)
-    close = Column(Float)
-    volume = Column(Integer)
-    stochastic = Column(Float, nullable=True)
-    rsi = Column(Float, nullable=True)
-    williams_r = Column(Float, nullable=True)
-    rate_of_change = Column(Float, nullable=True)
-    macd = Column(Float, nullable=True)
-    bollinger_bands = Column(Float, nullable=True)
-    proprietary_prediction = Column(Float, nullable=True)
+    def __init__(self):
+        """Initialize database paths and connections."""
+        self.sqlite_db_path = os.getenv('SQLITE_DB_PATH', str(project_root / 'data/databases/trading_data.db'))
+        
+        if not os.path.exists(self.sqlite_db_path):
+            logger.error(f"⚠️ SQLite Database not found at {self.sqlite_db_path}")
+            raise FileNotFoundError(f"Database not found at {self.sqlite_db_path}")
 
-class ModelData(Base):
-    __tablename__ = 'model_data'
-    id = Column(Integer, primary_key=True)
-    model_name = Column(String, nullable=False, index=True)
-    model_type = Column(String, nullable=False)
-    training_date = Column(DateTime, nullable=False)
-    hyperparameters = Column(String)
-    metrics = Column(String)
-    description = Column(String)
+        self.sqlite_engine = create_engine(f"sqlite:///{self.sqlite_db_path}")
 
-# -------------------------------------------------------------------
-# Function Definitions
-# -------------------------------------------------------------------
+    def inspect_table_schema(self, table_name='stock_data'):
+        """
+        Inspect the schema of the specified SQLite table.
 
-def inspect_table_schema(engine, table_name='stock_data'):
-    """
-    Inspect the schema of the specified table and log the details.
+        :param table_name: Table name to inspect.
+        :return: DataFrame with schema details.
+        """
+        query = f"PRAGMA table_info({table_name});"
+        try:
+            df_schema = pd.read_sql(query, self.sqlite_engine)
+            logger.info(f"Schema for table '{table_name}':\n{df_schema.to_string(index=False)}")
+            return df_schema
+        except Exception as e:
+            logger.error(f"⚠️ Error inspecting table schema for {table_name}: {e}")
+            return None
 
-    :param engine: SQLAlchemy engine instance.
-    :param table_name: Name of the table to inspect.
-    :return: DataFrame containing schema details.
-    """
-    query = f"PRAGMA table_info({table_name});"
-    try:
-        df_schema = pd.read_sql(query, engine)
-        print(f"Schema for table '{table_name}':\n", df_schema)
-        logger.info(f"Schema for table '{table_name}':\n{df_schema.to_string(index=False)}")
-        return df_schema
-    except Exception as e:
-        logger.error(f"Error inspecting table schema for {table_name}: {e}")
-        return None
+    def query_sample_data(self, table_name='stock_data', limit=5):
+        """
+        Query sample records from the SQLite table.
 
-def query_sample_data(engine, table_name='stock_data', limit=5):
-    """
-    Query a sample of data from the specified table.
+        :param table_name: Table name.
+        :param limit: Number of rows to fetch.
+        :return: DataFrame with sample data.
+        """
+        query = f"SELECT * FROM {table_name} LIMIT {limit};"
+        try:
+            df_sample = pd.read_sql(query, self.sqlite_engine)
+            logger.info(f"Sample data from table '{table_name}':\n{df_sample.to_string(index=False)}")
+            return df_sample
+        except Exception as e:
+            logger.error(f"⚠️ Error querying sample data from {table_name}: {e}")
+            return None
 
-    :param engine: SQLAlchemy engine instance.
-    :param table_name: Name of the table to query.
-    :param limit: Number of rows to retrieve.
-    :return: DataFrame containing the sample data.
-    """
-    query = f"SELECT * FROM {table_name} LIMIT {limit};"
-    try:
-        df_sample = pd.read_sql(query, engine)
-        print(f"Sample data from table '{table_name}' (Limited to {limit} rows):\n", df_sample)
-        logger.info(f"Sample data from table '{table_name}':\n{df_sample.to_string(index=False)}")
-        return df_sample
-    except Exception as e:
-        logger.error(f"Error querying sample data from {table_name}: {e}")
-        return None
+    def add_technical_indicators_columns(self, table_name='stock_data'):
+        """
+        Add necessary technical indicator columns to a given SQLite table.
 
-def add_technical_indicators_columns(engine, table_name='stock_data'):
-    """
-    Add columns for technical indicators to the specified SQLite table.
+        :param table_name: Table name.
+        """
+        columns_to_add = [
+            'stochastic REAL', 
+            'rsi REAL', 
+            'williams_r REAL',
+            'rate_of_change REAL',
+            'macd REAL',
+            'bollinger_bands REAL',
+            'proprietary_prediction REAL'
+        ]
+        with self.sqlite_engine.connect() as connection:
+            for column in columns_to_add:
+                try:
+                    query = text(f"ALTER TABLE {table_name} ADD COLUMN {column};")
+                    connection.execute(query)
+                    logger.info(f"✅ Successfully added column: {column}")
+                except SQLAlchemyError as e:
+                    if 'duplicate column name' in str(e).lower():
+                        logger.warning(f"⚠️ Column '{column.split()[0]}' already exists. Skipping.")
+                    else:
+                        logger.error(f"⚠️ Could not add column '{column}'. Error: {e}")
 
-    :param engine: SQLAlchemy engine instance.
-    :param table_name: Name of the table to modify.
-    """
-    columns_to_add = [
-        'stochastic REAL', 
-        'rsi REAL', 
-        'williams_r REAL',
-        'rate_of_change REAL',
-        'macd REAL',
-        'bollinger_bands REAL',
-        'proprietary_prediction REAL'
-    ]
-    with engine.connect() as connection:
-        for column in columns_to_add:
-            try:
-                query = text(f"ALTER TABLE {table_name} ADD COLUMN {column};")
-                connection.execute(query)
-                print(f"Successfully added column: {column}")
-                logger.info(f"Successfully added column: {column}")
-            except SQLAlchemyError as e:
-                if 'duplicate column name' in str(e).lower():
-                    print(f"Column '{column.split()[0]}' already exists. Skipping.")
-                    logger.warning(f"Column '{column.split()[0]}' already exists. Skipping.")
-                else:
-                    print(f"Warning: Could not add column '{column}'. Error: {e}")
-                    logger.error(f"Could not add column '{column}'. Error: {e}")
+    def validate_modifications(self, table_name='stock_data'):
+        """
+        Validate schema modifications by inspecting schema and sample data.
 
-def check_modifications(engine, table_name='stock_data'):
-    """
-    Validate the modifications to the table by querying the schema and sample data.
+        :param table_name: Table name.
+        """
+        self.query_sample_data(table_name)
+        self.inspect_table_schema(table_name)
 
-    :param engine: SQLAlchemy engine instance.
-    :param table_name: Name of the table to validate.
-    """
-    query_sample_data(engine, table_name)
-    inspect_table_schema(engine, table_name)
+    def migrate_to_postgres(self):
+        """
+        Migrate data from SQLite to PostgreSQL.
+        """
+        postgres_url = os.getenv("POSTGRES_URL", "postgresql://user:password@localhost:5432/trading_robot_plug")
+        postgres_engine = create_engine(postgres_url)
 
-# -------------------------------------------------------------------
-# Main Function
-# -------------------------------------------------------------------
-def main():
-    """
-    Main function to inspect, modify, and optionally migrate the SQLite database.
-    """
-    # SQLite database path
-    sqlite_db_path = os.getenv('SQLITE_DB_PATH', 'C:/Projects/TradingRobotPlug/data/databases/trading_data.db')
-    
-    if not os.path.exists(sqlite_db_path):
-        logger.error(f"SQLite Database not found at {sqlite_db_path}")
-        raise FileNotFoundError(f"Database not found at {sqlite_db_path}")
+        try:
+            # Load SQLite data
+            df = pd.read_sql("SELECT * FROM stock_data;", self.sqlite_engine)
+            logger.info(f"Loaded {len(df)} records from SQLite.")
 
-    sqlite_engine = create_engine(f"sqlite:///{sqlite_db_path}")
-    print("Inspecting current schema...")
-    logger.info("Inspecting current schema of SQLite database.")
-    inspect_table_schema(sqlite_engine)
+            # Insert into PostgreSQL
+            df.to_sql('stock_data', postgres_engine, if_exists='replace', index=False)
+            logger.info(f"✅ Successfully migrated {len(df)} records to PostgreSQL.")
 
-    print("\nQuerying sample data...")
-    logger.info("Querying sample data from SQLite database.")
-    query_sample_data(sqlite_engine, limit=10)
+        except Exception as e:
+            logger.error(f"⚠️ Migration to PostgreSQL failed: {e}")
 
-    print("\nAdding technical indicator columns...")
-    logger.info("Adding technical indicator columns to SQLite database.")
-    add_technical_indicators_columns(sqlite_engine)
+    def execute_transfer(self):
+        """
+        Execute all steps for inspecting, modifying, and migrating data.
+        """
+        try:
+            logger.info("🔍 Inspecting table schema...")
+            self.inspect_table_schema()
 
-    print("\nChecking modifications to the database...")
-    logger.info("Checking modifications to the SQLite database.")
-    check_modifications(sqlite_engine)
+            logger.info("📊 Querying sample data...")
+            self.query_sample_data(limit=10)
 
-    # Migration logic omitted for brevity.
-    print("\nMigration process completed.")
-    logger.info("Migration process completed.")
+            logger.info("🛠️ Adding technical indicator columns...")
+            self.add_technical_indicators_columns()
+
+            logger.info("✅ Validating modifications...")
+            self.validate_modifications()
+
+            logger.info("🚀 Migrating to PostgreSQL...")
+            self.migrate_to_postgres()
+
+            logger.info("✅ Database transfer process completed successfully!")
+
+        except Exception as e:
+            logger.error(f"⚠️ Error during database transfer: {e}")
 
 # -------------------------------------------------------------------
-# Future Improvements
+# Example Usage
 # -------------------------------------------------------------------
-# 1. Implement automated data validation after adding new columns.
-# 2. Expand migration options to include MySQL with comprehensive error handling.
-# 3. Introduce a user interface for selecting tables and columns to migrate.
-# 4. Integrate unit tests for each function to ensure reliability.
-# 5. Add support for incremental migrations to avoid duplicate entries.
-
 if __name__ == "__main__":
-    main()
+    db_transfer = DBInspectAndTransfer()
+    db_transfer.execute_transfer()

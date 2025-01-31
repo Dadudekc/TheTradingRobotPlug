@@ -1,105 +1,76 @@
+# File: main.py
+# Location: src/
+# Description: Entry point for fetching data, applying indicators, and storing in PostgreSQL.
+
 import asyncio
 import logging
-from Utilities.data_fetch_utils import DataFetchUtils
-import aiohttp
+import pandas as pd
+import psycopg2
+from Utilities.stock_data_agent import StockDataAgent
+from dotenv import load_dotenv
+import os
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("StockDataFetcher")
+logger = logging.getLogger("StockDataMain")
 
+# Database Connection Parameters
+DB_NAME = os.getenv("POSTGRES_DBNAME", "trading_robot_plug")
+DB_USER = os.getenv("POSTGRES_USER", "postgres")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "your_password")
+DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
+DB_PORT = os.getenv("POSTGRES_PORT", "5434")
 
-class StockDataAgent:
-    """
-    Agent interface for fetching stock data from multiple sources.
-    """
-
-    def __init__(self):
-        self.logger = logging.getLogger("StockDataAgent")
-        self.fetcher = DataFetchUtils()
-
-    async def get_real_time_quote(self, symbol: str) -> dict:
-        self.logger.info(f"Fetching real-time quote for {symbol}...")
-        async with aiohttp.ClientSession() as session:
-            try:
-                return await self.fetcher.fetch_finnhub_quote(symbol, session)
-            except Exception as e:
-                self.logger.error(f"Failed to fetch real-time quote for {symbol}: {e}")
-                return {}
-
-    async def get_historical_data(self, symbol: str, start_date: str, end_date: str, interval: str = "1Day") -> list:
-        self.logger.info(f"Fetching historical data for {symbol} from Alpaca...")
-        try:
-            return await self.fetcher.fetch_alpaca_data_async(symbol, start_date, end_date, interval=interval)
-        except Exception as e:
-            self.logger.error(f"Failed to fetch historical data for {symbol}: {e}")
-            return []
-
-    async def get_historical_data_alpha_vantage(self, symbol: str, start_date: str, end_date: str) -> list:
-        self.logger.info(f"Fetching historical data for {symbol} from Alpha Vantage...")
-        async with aiohttp.ClientSession() as session:
-            try:
-                return await self.fetcher.fetch_alphavantage_data(symbol, session, start_date, end_date)
-            except Exception as e:
-                self.logger.error(f"Failed to fetch historical data for {symbol} from Alpha Vantage: {e}")
-                return []
-
-    async def get_news(self, symbol: str, page_size: int = 3) -> list:
-        self.logger.info(f"Fetching recent news articles for {symbol}...")
-        try:
-            return await self.fetcher.fetch_news_data_async(symbol, page_size=page_size)
-        except Exception as e:
-            self.logger.error(f"Failed to fetch news for {symbol}: {e}")
-            return []
-
-    async def get_combined_data(self, symbol: str, start_date: str, end_date: str, interval: str = "1d") -> dict:
-        self.logger.info(f"Fetching combined data for {symbol} from multiple sources...")
-        async with aiohttp.ClientSession() as session:
-            try:
-                return await self.fetcher.fetch_data_for_multiple_symbols(
-                    symbols=[symbol],
-                    data_sources=["Alpaca", "Alpha Vantage", "Finnhub", "NewsAPI"],
-                    start_date=start_date,
-                    end_date=end_date,
-                    interval=interval,
-                )
-            except Exception as e:
-                self.logger.error(f"Failed to fetch combined data for {symbol}: {e}")
-                return {}
-
-
-async def showcase_stock_data(symbol="AAPL", start_date="2023-01-01", end_date="2023-12-31", interval="1Day"):
+async def showcase_stock_data(agent: StockDataAgent, symbol: str, start_date: str, end_date: str, interval: str = "1Day"):
     """
     Demonstrates the full capabilities of the StockDataAgent.
     """
-    agent = StockDataAgent()
+    logger.info(f"Starting showcase for {symbol}.")
 
     # Showcase data fetching capabilities
     try:
         real_time_quote = await agent.get_real_time_quote(symbol)
-        logger.info(f"Showcase Real-Time Quote: {real_time_quote}")
+        logger.info(f"Showcase Real-Time Quote for {symbol}: {real_time_quote}")
 
         historical_data = await agent.get_historical_data(symbol, start_date, end_date, interval)
-        logger.info(f"Showcase Historical Data from Alpaca: {historical_data}")
+        logger.info(f"Showcase Historical Data from Alpaca for {symbol}:\n{historical_data.head()}")
 
         historical_data_alpha = await agent.get_historical_data_alpha_vantage(symbol, start_date, end_date)
-        logger.info(f"Showcase Historical Data from Alpha Vantage: {historical_data_alpha}")
+        logger.info(f"Showcase Historical Data from Alpha Vantage for {symbol}:\n{historical_data_alpha.head()}")
 
         news = await agent.get_news(symbol, page_size=3)
-        logger.info(f"Showcase Recent News: {news}")
+        logger.info(f"Showcase Recent News for {symbol}:\n{news.head()}")
 
-        # Include `interval` explicitly
+        # Combined Data
         combined_data = await agent.get_combined_data(symbol, start_date, end_date, interval)
-        logger.info(f"Showcase Combined Data: {combined_data}")
+        logger.info(f"Showcase Combined Data for {symbol}:\n{combined_data}")
+
     except Exception as e:
-        logger.error(f"An error occurred during the showcase: {e}")
+        logger.error(f"An error occurred during the showcase for {symbol}: {e}")
 
+async def main():
+    """ Main function to fetch data and store in PostgreSQL. """
+    agent = StockDataAgent()
+    
+    symbols = ["AAPL", "TSLA", "AMZN"]
+    start_date = "2023-01-01"
+    end_date = "2023-12-31"
+    interval = "1d"
 
-def run():
-    """
-    Entry point for the script, wrapping the asyncio event loop.
-    """
-    asyncio.run(showcase_stock_data())
+    try:
+        # Fetch and store raw data
+        await agent.fetch_all_data(symbols, start_date=start_date, end_date=end_date, interval=interval)
+        logger.info("\nData Fetching & Storage Completed Successfully!\n")
 
+        # Showcase data capabilities
+        for symbol in symbols:
+            await showcase_stock_data(agent, symbol, start_date, end_date, interval)
+    
+    except Exception as e:
+        logger.error(f"Fatal error during data fetching: {e}")
 
 if __name__ == "__main__":
-    run()
+    asyncio.run(main())

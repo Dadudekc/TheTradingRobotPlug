@@ -42,10 +42,11 @@ sys.path.extend([
 # Import ConfigManager and Logging Setup
 # -------------------------------------------------------------------
 try:
-    from config_handling.config_manager import ConfigManager
-    from config_handling.logging_setup import setup_logging
+    from Utilities.config_manager import ConfigManager
+    from Utilities.shared_utils import setup_logging
 except ModuleNotFoundError as e:
     print(f"Error importing modules: {e}")
+
     sys.exit(1)
 
 # -------------------------------------------------------------------
