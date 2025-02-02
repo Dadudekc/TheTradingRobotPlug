@@ -1,0 +1,43 @@
+{
+    "standard_columns": {
+        "close_": "close",
+        "adj_close": "adjclose",
+        "macd_line": "macd_line",
+        "macd_signal": "macd_signal",
+        "macd_histogram": "macd_histogram",
+        "rsi": "rsi",
+        "stochastic": "stochastic",
+        "williams_r": "williams_r",
+        "rate_of_change": "roc",
+        "bollinger_upper": "bollinger_upper",
+        "bollinger_lower": "bollinger_lower",
+        "bollinger_mid": "bollinger_mid",
+        "bollinger_width": "bollinger_width",
+        "open": "open",
+        "high": "high",
+        "low": "low",
+        "volume": "volume",
+        "date": "date",
+        "symbol": "symbol"
+    },
+    "required_columns": [
+        "date",
+        "symbol",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+        "rsi",
+        "stochastic",
+        "williams_r",
+        "roc",
+        "bollinger_upper",
+        "bollinger_lower",
+        "bollinger_mid",
+        "bollinger_width"
+    ]
+}
