@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 # -------------------------------------------------------------------
 script_file = Path(__file__).resolve()
 script_name = script_file.name  # "momentum_indicators.py"
-project_root = script_file.parents[3]  # Adjusted for the project structure
+project_root = script_file.parents[4]  # Adjusted for the project structure
 
 print(f"[{script_name}] Current script path: {script_file}")
 print(f"[{script_name}] Project root: {project_root}")
@@ -66,10 +66,11 @@ sys.path.extend([
 # -------------------------------------------------------------------
 try:
     from Utilities.config_manager import ConfigManager, setup_logging
-    from Utilities.db.db_handler import DatabaseHandler
+    from Utilities.db.db_handler import DBHandler
     from Utilities.data.data_store import DataStore
     from Utilities.column_utils import ColumnUtils
     print(f"[{script_name}] Successfully imported config_manager, db_handler, data_store, column_utils.")
+
 except ImportError as e:
     print(f"[{script_name}] Error importing modules: {e}")
     sys.exit(1)
@@ -506,8 +507,9 @@ def main():
     logger.info("Entering main() in momentum_indicators.py")
     try:
         # Initialize DatabaseHandler
-        db_handler = DatabaseHandler(config=config_manager, logger=logger)
+        db_handler = DBHandler(config=config_manager, logger=logger)
         logger.info("DatabaseHandler initialized.")
+
 
         # Initialize DataStore
         data_store = DataStore(config=config_manager, logger=logger, use_csv=False)

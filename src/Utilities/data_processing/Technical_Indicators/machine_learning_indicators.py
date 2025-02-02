@@ -23,7 +23,7 @@ import sklearn
 # -------------------------------------------------------------------
 script_file = Path(__file__).resolve()
 script_name = script_file.name  # e.g., "machine_learning_indicators.py"
-project_root = script_file.parents[3]  # Adjusted for the project structure
+project_root = script_file.parents[4]  # Adjusted for the project structure
 
 # -------------------------------------------------------------------
 # Ensure project_root is in sys.path
@@ -59,10 +59,12 @@ sys.path.extend([
 # -------------------------------------------------------------------
 try:
     from Utilities.config_manager import ConfigManager, setup_logging
-    from Utilities.db.db_handler import DatabaseHandler
+    from Utilities.db.db_handler import DBHandler
     from Utilities.data.data_store import DataStore
     from Utilities.column_utils import ColumnUtils
+    from Utilities.data_processing.base_indicators import BaseIndicator
     print(f"[{script_name}] Imported config_manager, db_handler, data_store, column_utils successfully.")
+
 except ImportError as e:
     print(f"[{script_name}] Error importing modules: {e}")
     sys.exit(1)
@@ -113,29 +115,20 @@ except KeyError as e:
     sys.exit(1)
 
 # -------------------------------------------------------------------
-# Abstract Base Class for Indicators
-# -------------------------------------------------------------------
-class Indicator(ABC):
-    """
-    Abstract base class for all machine learning indicators.
-    """
-    @abstractmethod
-    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
-        pass
-
-# -------------------------------------------------------------------
 # MachineLearningIndicators Class
 # -------------------------------------------------------------------
-class MachineLearningIndicators(Indicator):
+class MachineLearningIndicators(BaseIndicator):
+
     """
     Class to handle machine learning indicators with caching and DataStore integration.
     """
     def __init__(
         self,
         data_store: Optional[DataStore] = None,
-        db_handler: Optional[DatabaseHandler] = None,
+        db_handler: Optional[DBHandler] = None,
         config: Optional[ConfigManager] = None,
         logger: Optional[logging.Logger] = None
+
     ):
         """
         Initialize the class and set up the DataStore for SQL data handling.
@@ -146,10 +139,10 @@ class MachineLearningIndicators(Indicator):
             config (ConfigManager, optional): For configurations.
             logger (logging.Logger, optional): Logger instance.
         """
+        super().__init__(logger)
         self.data_store = data_store
         self.db_handler = db_handler
         self.config = config
-        self.logger = logger or logging.getLogger(__name__)
         self.logger.info(f"[{script_name}] Initializing MachineLearningIndicators class...")
 
         if self.config and self.data_store:
@@ -383,10 +376,22 @@ class MachineLearningIndicators(Indicator):
         target_column = self.config.get('ML_TARGET_COLUMN', 'close')
 
         # Validate required columns (already done in ColumnUtils)
+        self.validate_dataframe(df, required_columns=feature_columns + [target_column], logger=self.logger)
+        self.logger.info(f"[{script_name}] DataFrame validated with required columns.")
+        self.logger.info(f"[{script_name}] Feature columns: {feature_columns}")
+        self.logger.info(f"[{script_name}] Target column: {target_column}")
+        self.logger.info(f"[{script_name}] DataFrame columns: {df.columns}")
+        self.logger.info(f"[{script_name}] DataFrame shape: {df.shape}")
+        self.logger.info(f"[{script_name}] DataFrame head: {df.head()}")
+        self.logger.info(f"[{script_name}] DataFrame tail: {df.tail()}")
+        self.logger.info(f"[{script_name}] DataFrame info: {df.info()}")
+        self.logger.info(f"[{script_name}] DataFrame describe: {df.describe()}")
+        self.logger.info(f"[{script_name}] DataFrame is null: {df.isnull().sum()}")
         # Additional validation can be performed here if necessary
 
         # Check data sufficiency
         try:
+
             MIN_ROWS = int(self.config.get('ML_MIN_ROWS', 50))
         except ValueError:
             self.logger.error(f"[{script_name}] ML_MIN_ROWS must be an integer.")
@@ -437,8 +442,9 @@ if __name__ == "__main__":
     def main():
         print(f"[{script_name}] Entering main function for demonstration.")
         try:
-            db_handler = DatabaseHandler(config=config_manager, logger=logger)
+            db_handler = DBHandler(config=config_manager, logger=logger)
             data_store = DataStore(config=config_manager, logger=logger, use_csv=False)
+
             ml_indicators = MachineLearningIndicators(
                 data_store=data_store,
                 db_handler=db_handler,

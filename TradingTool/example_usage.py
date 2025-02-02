@@ -7,7 +7,7 @@
 import asyncio
 import logging
 from aiohttp import ClientSession
-from Utilities.data_fetch_utils import DataFetchUtils
+from Utilities.main_data_fetcher import DataFetchUtils
 from Utilities.strategies.moving_averages import MovingAverages
 from Utilities.strategies.trading_strategies import TradingStrategies
 from Utilities.strategies.backtester import Backtester

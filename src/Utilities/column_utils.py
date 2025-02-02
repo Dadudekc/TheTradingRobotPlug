@@ -1,144 +1,151 @@
+# -------------------------------------------------------------------
 # File: column_utils.py
 # Location: src/Utilities
 # Description: Provides utilities for flattening, standardizing, and validating DataFrame columns.
+# -------------------------------------------------------------------
 
 import pandas as pd
 import logging
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, List
+from Utilities.shared_utils import setup_logging  # Ensure logging is unified
 
 class ColumnUtils:
     """
     Utility class for handling column naming, flattening MultiIndex columns,
     and ensuring consistency across the trading pipeline.
     """
-    
-    DEFAULT_COLUMN_MAP = {
-        'close_': 'close',
-        'adj_close': 'adjclose',
-        'macd_line': 'macd_line',
-        'macd_signal': 'macd_signal',
-        'macd_histogram': 'macd_histogram',
-        'rsi': 'rsi',
-        'bollinger_upper': 'bollinger_upper',
-        'bollinger_lower': 'bollinger_lower',
-        'bollinger_mid': 'bollinger_mid',
-        'open': 'open',
-        'high': 'high',
-        'low': 'low',
-        'volume': 'volume',
-        'date': 'date'
-    }
 
-    CONFIG_PATH = Path(__file__).parent / 'column_config.json'
+    DEFAULT_CONFIG_PATH_PRE = Path(__file__).parent / 'column_utils_mappings.json'
+    DEFAULT_CONFIG_PATH_POST = Path(__file__).parent / 'final_column_mappings.json'
 
-    @classmethod
-    def load_column_mapping(cls, config_path):
-        if not os.path.exists(config_path):
-            # Log a warning and use default mappings
-            print(f"Warning: Column configuration file not found at {config_path}. Using default mappings.")
+    def __init__(self, config_path: Optional[Path] = None, logger: Optional[logging.Logger] = None):
+        """
+        Initialize ColumnUtils with a configuration path for column mappings.
+
+        Args:
+            config_path (Path, optional): Path to the JSON config file.
+            logger (logging.Logger, optional): Logger instance.
+        """
+        self.config_path = config_path if config_path else self.DEFAULT_CONFIG_PATH_PRE
+        self.logger = logger or setup_logging("column_utils")
+
+        # Load configuration
+        self.column_mappings = self._load_column_mapping()
+        self.logger.info("ColumnUtils initialized.")
+
+    def _load_column_mapping(self) -> Dict[str, Dict[str, str]]:
+        """
+        Loads the column mapping configuration file.
+
+        Returns:
+            Dict[str, Dict[str, str]]: A dictionary containing 'standard_columns' and 'required_columns'.
+        """
+        if not self.config_path.exists():
+            self.logger.warning(f"Column config file not found at {self.config_path}. Using default mappings.")
             return {
-                "date": "Date",
-                "open": "Open",
-                "high": "High",
-                "low": "Low",
-                "close": "Close",
-                "volume": "Volume"
+                "standard_columns": {
+                    "date": "date",
+                    "open": "open",
+                    "high": "high",
+                    "low": "low",
+                    "close": "close",
+                    "volume": "volume"
+                },
+                "required_columns": [
+                    "date", "open", "high", "low", "close", "volume"
+                ]
             }
-        
-        with open(config_path, 'r') as file:
-            return json.load(file)
 
-    @staticmethod
-    def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+        try:
+            with open(self.config_path, 'r') as file:
+                config = json.load(file)
+                self.logger.info(f"Loaded column configuration from {self.config_path}")
+                return config
+        except Exception as e:
+            self.logger.error(f"Error loading column configuration: {e}", exc_info=True)
+            return {}
+
+    def flatten_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Flattens MultiIndex columns into single-level column names.
-
-        Example:
-        MultiIndex ('close', '') -> 'close'
-        MultiIndex ('macd', 'signal') -> 'macd_signal'
         """
         if isinstance(df.columns, pd.MultiIndex):
-            new_columns = ['_'.join(filter(None, map(str, col))).strip().lower() for col in df.columns.values]
-            df.columns = new_columns
+            df.columns = ['_'.join(filter(None, map(str, col))).strip().lower() for col in df.columns.values]
         else:
             df.columns = [col.lower() for col in df.columns]
+        
+        self.logger.debug(f"Flattened columns: {df.columns.tolist()}")
         return df
 
-    @staticmethod
-    def standardize_columns(df: pd.DataFrame, column_map: dict, logger: logging.Logger) -> pd.DataFrame:
+    def standardize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Standardizes column names based on a predefined mapping.
-
-        Args:
-            df (pd.DataFrame): The DataFrame whose columns need to be standardized.
-            column_map (dict): Mapping from existing column names to standardized names.
-            logger (logging.Logger): Logger instance for logging operations.
-
-        Returns:
-            pd.DataFrame: DataFrame with standardized column names.
+        Standardizes column names based on the loaded configuration.
         """
-        df = ColumnUtils.flatten_columns(df)
-        logger.debug(f"Columns after flattening: {df.columns.tolist()}")
-
+        df = self.flatten_columns(df)
+        column_map = self.column_mappings.get("standard_columns", {})
+        
         # Rename columns based on mapping
         df.rename(columns=column_map, inplace=True)
-        logger.info(f"Columns after standardization: {df.columns.tolist()}")
+        self.logger.info(f"Standardized columns: {df.columns.tolist()}")
 
         return df
 
-    @staticmethod
-    def validate_required_columns(df: pd.DataFrame, required_columns: list, logger: logging.Logger) -> bool:
+    def validate_required_columns(self, df: pd.DataFrame) -> bool:
         """
         Ensures the DataFrame contains the required columns.
-
-        Args:
-            df (pd.DataFrame): The DataFrame to validate.
-            required_columns (list): List of required column names.
-            logger (logging.Logger): Logger instance for logging operations.
-
-        Returns:
-            bool: True if all required columns exist, otherwise raises an error.
         """
+        print(f"[column_utils] Existing DataFrame columns: {list(df.columns)}")
+        required_columns = self.column_mappings.get("required_columns", [])
         missing_columns = [col for col in required_columns if col not in df.columns]
+        
         if missing_columns:
-            logger.error(f"Missing required columns: {missing_columns}")
+            self.logger.error(f"Missing required columns: {missing_columns}")
             raise KeyError(f"Missing required columns: {missing_columns}")
-        logger.debug("All required columns are present.")
+        
+        self.logger.debug("All required columns are present.")
         return True
 
-    @classmethod
-    def process_dataframe(
-        cls, 
-        df: pd.DataFrame, 
-        config_path: Optional[Path] = None,
-        required_columns: Optional[list] = None,
-        logger: Optional[logging.Logger] = None
-    ) -> pd.DataFrame:
+    def process_dataframe(self, df: pd.DataFrame, stage: str = "pre") -> pd.DataFrame:
         """
-        Fully processes a DataFrame to:
-        - Flatten MultiIndex columns
-        - Standardize column names
-        - Validate required columns
+        Fully processes a DataFrame by:
+        - Flattening MultiIndex columns
+        - Standardizing column names
+        - Validating required columns
 
         Args:
             df (pd.DataFrame): The DataFrame to process.
-            config_path (Path, optional): Path to the JSON config file.
-            required_columns (list, optional): List of essential column names.
-            logger (logging.Logger, optional): Logger instance.
+            stage (str): "pre" for preprocessing or "post" after indicators are applied.
 
         Returns:
             pd.DataFrame: Processed DataFrame with clean column names.
         """
-        if logger is None:
-            logger = logging.getLogger(__name__)
+        if stage == "pre":
+            self.config_path = self.DEFAULT_CONFIG_PATH_PRE
+        else:
+            self.config_path = self.DEFAULT_CONFIG_PATH_POST
+        
+        self.column_mappings = self._load_column_mapping()
+        df = self.standardize_columns(df)
+        df = self.flatten_columns(df)
+        df = self.validate_required_columns(df)
 
-        column_map = cls.load_column_mapping(config_path)
-        df = cls.standardize_columns(df, column_map, logger)
-
-        if required_columns:
-            cls.validate_required_columns(df, required_columns, logger)
-
+        self.logger.info(f"DataFrame processing completed for {stage} stage.")
         return df
+
+# Example Usage
+column_utils = ColumnUtils()
+
+df = pd.DataFrame({
+    "Date": ["2024-02-01", "2024-02-02"],
+    "Open": [150, 152],
+    "High": [155, 157],
+    "Low": [149, 151],
+    "Close": [153, 156],
+    "Volume": [100000, 120000]
+})
+
+processed_df = column_utils.process_dataframe(df, stage="pre")
+print(processed_df)

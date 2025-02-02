@@ -1,8 +1,9 @@
 # -------------------------------------------------------------------
 # File Path: C:\Projects\TradingRobotPlug\src\Data_Processing\Technical_Indicators\volume_indicators.py
-# Description: Provides volume indicators such as MFI, OBV, VWAP, 
-#              Accumulation/Distribution Line, Chaikin Money Flow, and Volume Oscillator.
-#              Integrates with ColumnUtils for column standardization and logging setup.
+# Description: Provides volume indicators such as MFI, OBV, VWAP,
+#              Accumulation/Distribution Line, Chaikin Money Flow, 
+#              and Volume Oscillator, integrating with ColumnUtils 
+#              for column standardization and logging setup.
 # -------------------------------------------------------------------
 
 import sys
@@ -13,15 +14,15 @@ from time import perf_counter as timer
 import numpy as np
 import pandas_ta as ta
 from multiprocessing import Pool, cpu_count
-from functools import partial
 from collections import deque
+from functools import partial
+from Utilities.data_processing.base_indicators import BaseIndicator
 
 # -------------------------------------------------------------------
 # Project Path Setup
 # -------------------------------------------------------------------
-# Dynamically adjust the Python path
-script_dir = Path(__file__).resolve().parent
-project_root = script_dir.parents[2]  # Adjust based on the project structure
+script_dir = Path(__file__).resolve()
+project_root = script_dir.parents[4]  # Adjust based on your project structure
 utilities_dir = project_root / 'src' / 'Utilities'
 
 # Add directories to sys.path for importing modules
@@ -34,9 +35,9 @@ if str(utilities_dir.resolve()) not in sys.path:
 try:
     from Utilities.config_manager import ConfigManager, setup_logging
     from Utilities.data.data_store import DataStore
-    from Utilities.db.db_handler import DatabaseHandler
+    from Utilities.db.db_handler import DBHandler
     from Utilities.column_utils import ColumnUtils
-    print(f"[volume_indicators.py] Imported config_manager, db_handler, data_store, column_utils successfully.")
+    print("[volume_indicators.py] Imported config_manager, db_handler, data_store, column_utils successfully.")
 except ImportError as e:
     print(f"[volume_indicators.py] Error importing utility modules: {e}")
     sys.exit(1)
@@ -46,8 +47,11 @@ except ImportError as e:
 # -------------------------------------------------------------------
 dotenv_path = project_root / '.env'
 required_keys = [
-    'POSTGRES_HOST', 'POSTGRES_DBNAME', 'POSTGRES_USER', 
-    'POSTGRES_PASSWORD', 'POSTGRES_PORT'
+    'POSTGRES_HOST', 
+    'POSTGRES_DBNAME', 
+    'POSTGRES_USER', 
+    'POSTGRES_PASSWORD', 
+    'POSTGRES_PORT'
 ]
 
 try:
@@ -73,31 +77,31 @@ logger.info("Logger initialized for volume indicators.")
 # -------------------------------------------------------------------
 # ColumnUtils Integration
 # -------------------------------------------------------------------
-# Define the required columns for volume indicators
+# Only the columns needed for volume indicators
 required_columns = [
     "close",
     "high",
     "low",
-    "macd_line",
-    "macd_signal",
-    "macd_histogram",
-    "rsi",
-    "bollinger_width",
+    "volume",
     "date"
 ]
 
 # -------------------------------------------------------------------
 # VolumeIndicators Class Definition
 # -------------------------------------------------------------------
-class VolumeIndicators:
-    def __init__(self, logger: logging.Logger = None):
+class VolumeIndicators(BaseIndicator):
+    """
+    Applies volume-based technical indicators (MFI, OBV, VWAP, ADL, CMF, Volume Oscillator).
+    """
+
+    def __init__(self, logger=None):
         """
         Initializes the VolumeIndicators class with an optional logger.
         
         Args:
             logger (logging.Logger, optional): Logger instance for logging.
         """
-        self.logger = logger or logging.getLogger(self.__class__.__name__)
+        super().__init__(logger)
         self.logger.info("VolumeIndicators initialized.")
     
     def downcast_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -129,23 +133,17 @@ class VolumeIndicators:
         else:
             self.logger.error("No 'date' or 'Date' column found in DataFrame.")
             raise KeyError("Date column missing")
+
         self.logger.info("'Date' set as DatetimeIndex.")
         return df
 
     def add_money_flow_index(self, df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
         """
         Adds Money Flow Index (MFI) to the DataFrame.
-        
-        Args:
-            df (pd.DataFrame): DataFrame containing stock data.
-            window (int): The period for MFI calculation. Defaults to 14.
-        
-        Returns:
-            pd.DataFrame: DataFrame with 'mfi' column added.
         """
         self.logger.info("Adding Money Flow Index (MFI)")
-        required_columns = ['high', 'low', 'close', 'volume']
-        self._validate_columns(df, required_columns)
+        required = ['high', 'low', 'close', 'volume']
+        self._validate_columns(df, required)
 
         try:
             mfi = ta.mfi(high=df['high'], low=df['low'], close=df['close'], volume=df['volume'], length=window)
@@ -160,12 +158,6 @@ class VolumeIndicators:
     def add_on_balance_volume(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Adds On-Balance Volume (OBV) to the DataFrame.
-        
-        Args:
-            df (pd.DataFrame): DataFrame containing stock data.
-        
-        Returns:
-            pd.DataFrame: DataFrame with 'obv' column added.
         """
         self.logger.info("Adding On-Balance Volume (OBV)")
         self._validate_columns(df, ['volume', 'close'])
@@ -176,19 +168,13 @@ class VolumeIndicators:
             self.logger.info("Successfully added OBV")
         except Exception as e:
             self.logger.error(f"Failed to calculate OBV: {e}", exc_info=True)
-            df['obv'] = 0.0  # Assign default value or handle as needed
+            df['obv'] = 0.0
 
         return df
 
     def add_vwap(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Adds Volume Weighted Average Price (VWAP) to the DataFrame.
-        
-        Args:
-            df (pd.DataFrame): DataFrame containing stock data.
-        
-        Returns:
-            pd.DataFrame: DataFrame with 'vwap' column added.
         """
         self.logger.info("Adding Volume Weighted Average Price (VWAP)")
         self._validate_columns(df, ['high', 'low', 'close', 'volume'])
@@ -199,19 +185,13 @@ class VolumeIndicators:
             self.logger.info("Successfully added VWAP")
         except Exception as e:
             self.logger.error(f"Failed to calculate VWAP: {e}", exc_info=True)
-            df['vwap'] = 0.0  # Assign default value or handle as needed
+            df['vwap'] = 0.0
 
         return df
 
     def add_accumulation_distribution_line(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Adds the Accumulation/Distribution Line (ADL) to the DataFrame.
-        
-        Args:
-            df (pd.DataFrame): DataFrame containing stock data.
-        
-        Returns:
-            pd.DataFrame: DataFrame with 'adl' column added.
         """
         self.logger.info("Adding Accumulation/Distribution Line (ADL)")
         self._validate_columns(df, ['close', 'low', 'high', 'volume'])
@@ -222,20 +202,13 @@ class VolumeIndicators:
             self.logger.info("Successfully added ADL")
         except Exception as e:
             self.logger.error(f"Failed to calculate ADL: {e}", exc_info=True)
-            df['adl'] = 0.0  # Assign default value or handle as needed
+            df['adl'] = 0.0
 
         return df
 
     def add_chaikin_money_flow(self, df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
         """
         Adds Chaikin Money Flow (CMF) to the DataFrame.
-        
-        Args:
-            df (pd.DataFrame): DataFrame containing stock data.
-            window (int): The period for CMF calculation. Defaults to 14.
-        
-        Returns:
-            pd.DataFrame: DataFrame with 'cmf' column added.
         """
         self.logger.info("Adding Chaikin Money Flow (CMF)")
         self._validate_columns(df, ['high', 'low', 'close', 'volume'])
@@ -246,21 +219,13 @@ class VolumeIndicators:
             self.logger.info("Successfully added CMF")
         except Exception as e:
             self.logger.error(f"Failed to calculate CMF: {e}", exc_info=True)
-            df['cmf'] = 0.0  # Assign default value or handle as needed
+            df['cmf'] = 0.0
 
         return df
 
     def add_volume_oscillator(self, df: pd.DataFrame, short_window: int = 12, long_window: int = 26) -> pd.DataFrame:
         """
         Adds Volume Oscillator to the DataFrame.
-        
-        Args:
-            df (pd.DataFrame): DataFrame containing stock data.
-            short_window (int): Short period for EMA calculation. Defaults to 12.
-            long_window (int): Long period for EMA calculation. Defaults to 26.
-        
-        Returns:
-            pd.DataFrame: DataFrame with 'volume_oscillator' column added.
         """
         self.logger.info("Adding Volume Oscillator")
         self._validate_columns(df, ['volume'])
@@ -273,7 +238,7 @@ class VolumeIndicators:
             self.logger.info("Successfully added Volume Oscillator")
         except Exception as e:
             self.logger.error(f"Failed to calculate Volume Oscillator: {e}", exc_info=True)
-            df['volume_oscillator'] = 0.0  # Assign default value or handle as needed
+            df['volume_oscillator'] = 0.0
 
         return df
 
@@ -281,13 +246,6 @@ class VolumeIndicators:
     def _validate_columns(df: pd.DataFrame, required_columns: list):
         """
         Validates the presence of required columns in the DataFrame.
-        
-        Args:
-            df (pd.DataFrame): DataFrame containing stock data.
-            required_columns (list): List of columns required for the calculation.
-        
-        Raises:
-            ValueError: If required columns are missing from the DataFrame.
         """
         missing_cols = [col for col in required_columns if col not in df.columns]
         if missing_cols:
@@ -296,15 +254,9 @@ class VolumeIndicators:
     def apply_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Applies volume-based technical indicators to the DataFrame.
-
-        Args:
-            df (pd.DataFrame): DataFrame containing stock data with standardized column names.
-
-        Returns:
-            pd.DataFrame: DataFrame with added volume-based indicators.
         """
         self.logger.info("Applying Volume Indicators...")
-        
+
         try:
             df = self.set_datetime_index(df)
             df = self.downcast_dataframe(df)
@@ -317,7 +269,7 @@ class VolumeIndicators:
             self.logger.info("Successfully applied all Volume Indicators.")
         except Exception as e:
             self.logger.error(f"Error applying Volume Indicators: {e}", exc_info=True)
-        
+
         return df
 
     # -------------------------------------------------------------------
@@ -339,10 +291,6 @@ class VolumeIndicators:
     def process_large_dataset(self, file_path: str, chunksize: int = 50000) -> None:
         """
         Processes a large CSV in chunks and saves the result with indicators.
-
-        Args:
-            file_path (str): Path to the input CSV file.
-            chunksize (int, optional): Number of rows per chunk. Defaults to 50000.
         """
         self.logger.info(f"Starting chunked processing for {file_path} (chunksize={chunksize})")
         start_time = timer()
@@ -350,12 +298,12 @@ class VolumeIndicators:
         try:
             pool = Pool(cpu_count())
             reader = pd.read_csv(
-                file_path, 
-                chunksize=chunksize, 
+                file_path,
+                chunksize=chunksize,
                 dtype={
-                    'close': 'float32', 
-                    'high': 'float32', 
-                    'low': 'float32', 
+                    'close': 'float32',
+                    'high': 'float32',
+                    'low': 'float32',
                     'volume': 'int32'
                 }
             )
@@ -376,10 +324,6 @@ class VolumeIndicators:
     def process_streaming_data(self, data_stream, window_size: int = 20):
         """
         Processes streaming data with a sliding window approach.
-
-        Args:
-            data_stream (iterable): An iterable stream of data points.
-            window_size (int, optional): The size of the sliding window. Defaults to 20.
         """
         self.logger.info("Starting streaming data processing.")
         buffer = deque(maxlen=window_size)
@@ -407,7 +351,7 @@ def main():
     logger.info("Entering main() in volume_indicators.py")
     try:
         # Initialize DatabaseHandler
-        db_handler = DatabaseHandler(config=config_manager, logger=logger)
+        db_handler = DBHandler(logger=logger)
         logger.info("DatabaseHandler initialized.")
 
         # Initialize DataStore
@@ -422,13 +366,14 @@ def main():
             logger.error(f"No data found for symbol '{symbol}'. Exiting.")
             return
 
-        # Process the DataFrame using ColumnUtils to ensure all columns are lowercase and required columns are present
+        # Process the DataFrame using ColumnUtils
+        # (only requiring the volume-related columns for this module)
         try:
             column_config_path = project_root / 'src' / 'Utilities' / 'column_config.json'
             df = ColumnUtils.process_dataframe(
                 df,
                 config_path=column_config_path,
-                required_columns=required_columns,
+                required_columns=required_columns,  # Only volume-based columns
                 logger=logger
             )
             logger.info("DataFrame processed with ColumnUtils.")
@@ -436,20 +381,14 @@ def main():
             logger.error(f"Data processing failed: {ve}")
             return
 
-        # Initialize VolumeIndicators and apply indicators
+        # Initialize VolumeIndicators and apply them
         volume_indicators = VolumeIndicators(logger=logger)
-
-        # Apply indicators
         df = volume_indicators.apply_indicators(df)
 
         # Display the updated data
         expected_cols = [
-            "mfi",
-            "obv",
-            "vwap",
-            "adl",
-            "cmf",
-            "volume_oscillator"
+            "mfi", "obv", "vwap", "adl",
+            "cmf", "volume_oscillator"
         ]
         missing_cols = [col for col in expected_cols if col not in df.columns]
         if missing_cols:

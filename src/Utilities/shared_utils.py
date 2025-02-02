@@ -1,7 +1,14 @@
+# -------------------------------------------------------------------
+# File Path: src/Utilities/shared_utils.py
+# Description: Shared utilities for the TradingRobotPlug project.
+#              Provides logging setup and shared functions.
+# -------------------------------------------------------------------
+
 import logging
 from pathlib import Path
 
 def setup_logging(
+
     script_name: str,
     log_dir: Path = None,
     max_log_size: int = 5 * 1024 * 1024,

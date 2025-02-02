@@ -15,7 +15,7 @@ import aiohttp
 from aioresponses import aioresponses
 from unittest.mock import patch, MagicMock
 from datetime import date
-from src.Utilities.data_fetch_utils import DataFetchUtils
+from Utilities.main_data_fetcher import DataFetchUtils
 
 
 @pytest.mark.asyncio

@@ -19,5 +19,5 @@ def data_fetch_utils_fixture(monkeypatch):
         mock_logging.return_value = mock_logger
 
         # Import DataFetchUtils **after** mocking
-        from src.Utilities.data_fetch_utils import DataFetchUtils
+        from Utilities.main_data_fetcher import DataFetchUtils
         return DataFetchUtils(logger=mock_logger)

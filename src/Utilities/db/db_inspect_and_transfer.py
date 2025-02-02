@@ -35,17 +35,7 @@ except ModuleNotFoundError as e:
 env_path = project_root / '.env'
 load_dotenv(dotenv_path=env_path)
 
-# Logging Setup
-log_dir = project_root / 'logs' / 'Utilities'
-log_dir.mkdir(parents=True, exist_ok=True)
-logger = logging.getLogger('db_inspect_and_transfer')
-logger.setLevel(logging.INFO)
-
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(asctime)s - %(filename)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+logger = setup_logging("db_inspect_and_transfer")
 
 # -------------------------------------------------------------------
 # DBInspectAndTransfer Class

@@ -1,44 +1,123 @@
-# -------------------------------------------------------------------
-# Description: Connects to a PostgreSQL database using SQLAlchemy,
-#              retrieves stock data for 'AAPL' from the 'stock_data' table,
-#              and fetches the first 10 records sorted by date in ascending order.
-# -------------------------------------------------------------------
-
-from sqlalchemy import create_engine, text
-import pandas as pd
-
-# Define the PostgreSQL connection details
-DATABASE_URL = "postgresql://postgres:password@localhost:5434/trading_robot_plug"
-
-# Create the SQLAlchemy engine for connecting to the database
-engine = create_engine(DATABASE_URL)
-
-# Define the query to retrieve data for AAPL from the stock_data table
-query = """
-SELECT * FROM stock_data
-WHERE symbol = 'AAPL'
-ORDER BY "Date" ASC
-LIMIT 10;  -- Fetching only the first 10 records for brevity
+"""
+File: inspect_db_data.py
+Description:
+    Connects to a PostgreSQL database using SQLAlchemy,
+    retrieves stock data for a given symbol from the 'stock_data' table,
+    and fetches a configurable number of records sorted by date.
 """
 
-# Execute the query and fetch the results into a DataFrame
-with engine.connect() as connection:
-    df_aapl = pd.read_sql_query(text(query), con=connection)
+import logging
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+import pandas as pd
+from typing import Optional
+from pathlib import Path
+from dotenv import load_dotenv
+import os
 
-# Display the fetched data
-print(df_aapl)
-
-# -------------------------------------------------------------------
-# Example Usage:
-#     Simply run the script to connect to the database and fetch the data:
-#         python fetch_aapl_data.py
-#     The output will display the first 10 records for 'AAPL' from the 'stock_data' table.
-# -------------------------------------------------------------------
+from Utilities.shared_utils import setup_logging
 
 # -------------------------------------------------------------------
-# Future Improvements:
-#     - Parameterize the symbol and limit values to make the script more flexible.
-#     - Add error handling for database connection issues and query execution.
-#     - Implement logging for better tracking of query execution and results.
-#     - Allow date range as input to filter data for specific periods.
+# Logger Configuration
 # -------------------------------------------------------------------
+logger = setup_logging("inspect_db_data")
+
+
+# -------------------------------------------------------------------
+# Load Environment Variables
+# -------------------------------------------------------------------
+env_path = Path(__file__).resolve().parents[3] / ".env"
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
+    logger.info("Environment variables loaded successfully.")
+else:
+    logger.warning(".env file not found. Ensure database credentials are set.")
+
+# -------------------------------------------------------------------
+# Database Configuration
+# -------------------------------------------------------------------
+DB_USER = os.getenv("POSTGRES_USER", "postgres")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
+DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
+DB_PORT = os.getenv("POSTGRES_PORT", "5434")
+DB_NAME = os.getenv("POSTGRES_DBNAME", "trading_robot_plug")
+
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+
+class InspectDBData:
+    """
+    Handles fetching stock data from the PostgreSQL database.
+    """
+
+
+    def __init__(self):
+        """
+        Initialize the database connection.
+        """
+        try:
+            self.engine = create_engine(DATABASE_URL)
+            logger.info("Successfully connected to the PostgreSQL database.")
+        except SQLAlchemyError as e:
+            logger.error(f"Failed to connect to the database: {e}", exc_info=True)
+            self.engine = None
+
+    def inspect_db_data(self, symbol: str = "AAPL", limit: int = 10) -> Optional[pd.DataFrame]:
+        """
+        Fetch stock data for a given symbol, sorted by date.
+
+
+        Args:
+            symbol (str): Stock symbol to fetch data for (default: 'AAPL').
+            limit (int): Number of records to fetch (default: 10).
+
+        Returns:
+            pd.DataFrame: DataFrame containing fetched stock data, or None on error.
+        """
+        if not self.engine:
+            logger.error("No database connection available.")
+            return None
+
+
+        query = text(
+            f"""
+            SELECT * FROM stock_data
+            WHERE symbol = :symbol
+            ORDER BY "Date" ASC
+            LIMIT :limit;
+            """
+        )
+
+        try:
+            with self.engine.connect() as connection:
+                df = pd.read_sql_query(query, con=connection, params={"symbol": symbol, "limit": limit})
+                logger.info(f"Successfully fetched {len(df)} records for {symbol}.")
+                return df
+        except SQLAlchemyError as e:
+            logger.error(f"Error fetching stock data for {symbol}: {e}", exc_info=True)
+            return None
+
+
+    def close_connection(self):
+        """Close the database connection."""
+        if self.engine:
+            self.engine.dispose()
+            logger.info("Database connection closed.")
+
+
+
+# -------------------------------------------------------------------
+# Example Usage
+# -------------------------------------------------------------------
+if __name__ == "__main__":
+    fetcher = InspectDBData()
+    df_aapl = fetcher.inspect_db_data(symbol="AAPL", limit=10)
+
+
+    if df_aapl is not None and not df_aapl.empty:
+        print(df_aapl)
+    else:
+        print("No data found or failed to fetch data.")
+
+
+    fetcher.close_connection()

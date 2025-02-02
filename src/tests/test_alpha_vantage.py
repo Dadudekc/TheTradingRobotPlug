@@ -11,7 +11,7 @@ import aiohttp
 import pandas as pd
 from aioresponses import aioresponses
 from unittest.mock import patch, MagicMock
-from src.Utilities.data_fetch_utils import DataFetchUtils
+from Utilities.main_data_fetcher import DataFetchUtils
 from pathlib import Path
 
 @pytest.mark.asyncio

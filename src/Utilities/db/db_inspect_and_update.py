@@ -1,11 +1,15 @@
-# -------------------------------------------------------------------
-# File Path: src/Utilities/db/db_inspect_and_update.py
-# Description: Handles database inspection, schema modifications,
-#              fetching stock data from APIs, and migration to PostgreSQL.
-# -------------------------------------------------------------------
+"""
+File: db_inspect_and_update.py
+Path: src/Utilities/db/db_inspect_and_update.py
+
+Description:
+    Handles database inspection, schema modifications,
+    fetching stock data from APIs, and migration to PostgreSQL.
+"""
 
 import os
 import sys
+import asyncio
 import pandas as pd
 from pathlib import Path
 from typing import Optional
@@ -20,17 +24,20 @@ import logging
 script_dir = Path(__file__).resolve().parent
 project_root = script_dir.parents[2]
 utilities_dir = project_root / 'src' / 'Utilities'
+
 sys.path.append(str(utilities_dir))
 
-# Import ConfigManager and Logging
+# -------------------------------------------------------------------
+# Import Required Modules
+# -------------------------------------------------------------------
 try:
     from Utilities.config_manager import ConfigManager
     from Utilities.shared_utils import setup_logging
-    from Utilities.fetchers.alpaca_fetcher import AlpacaDataFetcher
-    from Utilities.fetchers.polygon_fetcher import PolygonDataFetcher
-    from Utilities.fetchers.alphavantage_fetcher import AlphaVantageFetcher
-    from Utilities.fetchers.yahoo_finance_fetcher import YahooFinanceFetcher
-    from Utilities.data_processing.main_indicators import AllIndicatorsUnifier
+    from Utilities.data_fetchers.alpaca_fetcher import AlpacaDataFetcher
+    from Utilities.data_fetchers.polygon_fetcher import PolygonDataFetcher
+    from Utilities.data_fetchers.alphavantage_fetcher import AlphaVantageFetcher
+    from Utilities.data_fetchers.yahoo_finance_fetcher import YahooFinanceFetcher
+    from Utilities.data_processing.indicator_unifier import AllIndicatorsUnifier
 except ModuleNotFoundError as e:
     print(f"Error importing modules: {e}")
     sys.exit(1)
@@ -50,13 +57,16 @@ logger = setup_logging(str(log_dir / 'db_inspect_and_update'))
 # DBInspectAndUpdate Class
 # -------------------------------------------------------------------
 class DBInspectAndUpdate:
-    """Handles database inspection, schema modifications, data fetching, and migration."""
+    """
+    Handles database inspection, schema modifications,
+    data fetching, and migration.
+    """
 
     def __init__(self):
         """Initialize database paths, connections, and data fetchers."""
         self.config_manager = ConfigManager()
         self.sqlite_db_path = self.config_manager.get('SQLITE_DB_PATH', str(project_root / 'data/databases/trading_data.db'))
-        
+
         if not os.path.exists(self.sqlite_db_path):
             logger.error(f"⚠️ SQLite Database not found at {self.sqlite_db_path}")
             raise FileNotFoundError(f"Database not found at {self.sqlite_db_path}")
@@ -64,11 +74,11 @@ class DBInspectAndUpdate:
         self.sqlite_engine = create_engine(f"sqlite:///{self.sqlite_db_path}")
         self.alpaca_fetcher = AlpacaDataFetcher()
         self.polygon_fetcher = PolygonDataFetcher()
-        self.alpha_vantage_fetcher = AlphaVantageDataFetcher()
-        self.yfinance_fetcher = YFinanceDataFetcher()
+        self.alpha_vantage_fetcher = AlphaVantageFetcher()
+        self.yfinance_fetcher = YahooFinanceFetcher()
         self.indicator_aggregator = AllIndicatorsUnifier(logger=logger)
 
-    def inspect_table_schema(self, table_name='stock_data'):
+    def inspect_table_schema(self, table_name: str = 'stock_data') -> Optional[pd.DataFrame]:
         """
         Inspect the schema of the specified SQLite table.
 
@@ -84,7 +94,7 @@ class DBInspectAndUpdate:
             logger.error(f"⚠️ Error inspecting table schema for {table_name}: {e}")
             return None
 
-    def query_sample_data(self, table_name='stock_data', limit=5):
+    def query_sample_data(self, table_name: str = 'stock_data', limit: int = 5) -> Optional[pd.DataFrame]:
         """
         Query sample records from the SQLite table.
 
@@ -101,15 +111,15 @@ class DBInspectAndUpdate:
             logger.error(f"⚠️ Error querying sample data from {table_name}: {e}")
             return None
 
-    def add_technical_indicators_columns(self, table_name='stock_data'):
+    def add_technical_indicators_columns(self, table_name: str = 'stock_data'):
         """
         Add necessary technical indicator columns to a given SQLite table.
 
         :param table_name: Table name.
         """
         columns_to_add = [
-            'stochastic REAL', 
-            'rsi REAL', 
+            'stochastic REAL',
+            'rsi REAL',
             'williams_r REAL',
             'rate_of_change REAL',
             'macd REAL',
@@ -128,7 +138,7 @@ class DBInspectAndUpdate:
                     else:
                         logger.error(f"⚠️ Could not add column '{column}'. Error: {e}")
 
-    def validate_modifications(self, table_name='stock_data'):
+    def validate_modifications(self, table_name: str = 'stock_data'):
         """
         Validate schema modifications by inspecting schema and sample data.
 
@@ -146,14 +156,27 @@ class DBInspectAndUpdate:
         :param end_date: End date.
         """
         logger.info(f"Fetching data for symbol: {symbol}")
-        alpaca_data = await self.alpaca_fetcher.fetch_and_store_data(symbol, start=start_date, end=end_date)
-        polygon_data = await self.polygon_fetcher.fetch_data_with_date_range(symbol, start_date, end_date)
-        alpha_vantage_data = await self.alpha_vantage_fetcher.fetch_data_for_symbol(symbol, start_date, end_date)
-        yfinance_data = self.yfinance_fetcher.fetch_data_from_yfinance(symbol, start_date, end_date)
+        fetchers = [
+            self.alpaca_fetcher.fetch_and_store_data(symbol, start=start_date, end=end_date),
+            self.polygon_fetcher.fetch_data_with_date_range(symbol, start_date, end_date),
+            self.alpha_vantage_fetcher.fetch_data_for_symbol(symbol, start_date, end_date)
+        ]
 
-        for data in [alpaca_data, polygon_data, alpha_vantage_data, yfinance_data]:
-            if data is not None:
+        results = await asyncio.gather(*fetchers, return_exceptions=True)
+
+        for data in results:
+            if isinstance(data, Exception):
+                logger.error(f"⚠️ Error fetching data: {data}")
+            elif data is not None:
                 self.indicator_aggregator.apply_all_indicators(data)
+
+        # Fetch Yahoo Finance data separately (as it may not be async)
+        try:
+            yfinance_data = self.yfinance_fetcher.fetch_data_from_yfinance(symbol, start_date, end_date)
+            if yfinance_data is not None:
+                self.indicator_aggregator.apply_all_indicators(yfinance_data)
+        except Exception as e:
+            logger.error(f"⚠️ Error fetching Yahoo Finance data: {e}")
 
     def execute_update(self):
         """

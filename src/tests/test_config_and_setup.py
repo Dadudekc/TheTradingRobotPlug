@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 import os
 from unittest.mock import patch, MagicMock
-from src.Utilities.data_fetch_utils import initialize_alpaca, get_project_root
-from src.Utilities.data_fetch_utils import DataFetchUtils
+from Utilities.main_data_fetcher import initialize_alpaca, get_project_root
+from Utilities.main_data_fetcher import DataFetchUtils
 
 def test_initialize_alpaca_invalid_config(monkeypatch):
     """

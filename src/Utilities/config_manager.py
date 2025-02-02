@@ -62,9 +62,10 @@ class ConfigManager:
             strict_keys (bool): If True, environment variables from .env are ignored when checking `required=True`.
         """
         self.config = defaultdict(dict)
-        self.logger = logger or self.setup_logger("ConfigManager")
+        self.logger = setup_logging("ConfigManager")
         self.cache = {}
         self.lock = threading.Lock()
+
 
         self.config_overrides_env = config_overrides_env
         self.strict_keys = strict_keys
@@ -74,7 +75,7 @@ class ConfigManager:
             self.project_root = project_root.resolve()
         else:
             script_dir = Path(__file__).resolve().parent
-            self.project_root = script_dir.parents[1]  # Adjust as needed
+            self.project_root = script_dir.parent.parent.parent
 
         # Load the .env file if present
         env_path = env_file or (self.project_root / '.env')
@@ -405,38 +406,3 @@ class ConfigManager:
             masked_configs = all_configs
 
         return masked_configs
-
-    @staticmethod
-    def setup_logger(log_name: str) -> logging.Logger:
-        """
-        Sets up a logger that writes logs to both the console and a dedicated file.
-
-        Args:
-            log_name (str): Name of the logger.
-
-        Returns:
-            logging.Logger: The configured logger.
-        """
-        logger = logging.getLogger(log_name)
-        if not logger.hasHandlers():
-            logger.setLevel(logging.DEBUG)
-
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
-
-            script_dir = Path(__file__).resolve().parent
-            project_root = script_dir.parents[2]
-            log_dir = project_root / 'logs' / 'Utilities'
-            log_dir.mkdir(parents=True, exist_ok=True)
-
-            file_handler = logging.FileHandler(log_dir / f"{log_name}.log")
-            file_handler.setLevel(logging.DEBUG)
-
-            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-            console_handler.setFormatter(formatter)
-            file_handler.setFormatter(formatter)
-
-            logger.addHandler(console_handler)
-            logger.addHandler(file_handler)
-
-        return logger

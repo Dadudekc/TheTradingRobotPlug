@@ -11,7 +11,7 @@ import os
 from unittest.mock import patch, MagicMock
 import pandas as pd
 from aioresponses import aioresponses
-from src.Utilities.data_fetch_utils import DataFetchUtils
+from Utilities.main_data_fetcher import DataFetchUtils
 
 @pytest.mark.asyncio
 async def test_fetch_news_data_async_success(data_fetch_utils_fixture):

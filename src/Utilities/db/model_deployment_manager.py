@@ -1,7 +1,11 @@
 # -------------------------------------------------------------------
-# File Path: C:/Projects/TradingRobotPlug/src/Utilities/db/model_deployment_manager.py
-# Description: Manages model deployments by ensuring the deployment table exists,
-#              retrieving top-performing models, and saving new models to PostgreSQL.
+# File: model_deployment_manager.py
+# Location: C:/Projects/TradingRobotPlug/src/Utilities/db
+# Description:
+#   A class-based manager for model deployments, including table creation,
+#   fetching top-performing models, saving new models, and more.
+#   Extended with long-term goals in mind, so you can easily expand
+#   to new functionalities like advanced analytics or multi-region deployments.
 # -------------------------------------------------------------------
 
 import os
@@ -9,63 +13,40 @@ import sys
 from pathlib import Path
 import logging
 from typing import Dict, Optional, List
-from dotenv import load_dotenv
-import pandas as pd
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy import create_engine, Column, String, Float, Date, BigInteger, Integer, TIMESTAMP, Text, JSON, LargeBinary
-from sqlalchemy.exc import SQLAlchemyError
-from logging.handlers import RotatingFileHandler
 from datetime import datetime
+from dotenv import load_dotenv
 
-# -----------------------------
-# Fallback Implementations
-# -----------------------------
+import pandas as pd
+from sqlalchemy import create_engine, Column, String, Float, Integer, TIMESTAMP, Text, JSON, LargeBinary
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker, declarative_base
 
-# 1. Basic Logging Setup
-def setup_logging(log_name: str, log_dir: Path) -> logging.Logger:
-    """
-    Sets up logging with console and rotating file handlers.
-    
-    Args:
-        log_name (str): Name of the logger.
-        log_dir (Path): Directory where log files will be stored.
-    
-    Returns:
-        logging.Logger: Configured logger instance.
-    """
-    logger = logging.getLogger(log_name)
-    logger.setLevel(logging.DEBUG)  # Set to DEBUG for detailed logs
+from logging.handlers import RotatingFileHandler
 
-    # Create handlers
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
+# -------------------------------------------------------------------
+# Local Utilities from Your Project
+# -------------------------------------------------------------------
+from Utilities.config_manager import ConfigManager
+from Utilities.db.db_handler import DBHandler
+from Utilities.db.db_connection import DBConnection
+from Utilities.db.models import Models
+from Utilities.db.database_restructure import DatabaseRestructure
+from Utilities.db.db_inspect_and_transfer import DBInspectAndTransfer
+from Utilities.db.db_inspect_and_update import DBInspectAndUpdate
+from Utilities.db.global_model_cleaner import GlobalModelCleaner
+from Utilities.db.inspect_db_data import InspectDBData
 
-    # Ensure the logs directory exists
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f"{log_name}.log"
-
-    file_handler = RotatingFileHandler(
-        log_file, maxBytes=5 * 1024 * 1024, backupCount=3  # 5 MB per file
-    )
-    file_handler.setLevel(logging.DEBUG)
-
-    # Create formatter and add it to the handlers
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    console_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
-
-    # Add handlers to the logger if they are not already added
-    if not logger.handlers:
-        logger.addHandler(console_handler)
-        logger.addHandler(file_handler)
-
-    return logger
-
-# 2. SQLAlchemy Base and Models
+# -------------------------------------------------------------------
+# SQLAlchemy Declarations
+# -------------------------------------------------------------------
 Base = declarative_base()
 
 class ModelDeployment(Base):
+    """
+    SQLAlchemy ORM for the 'model_deployment' table, storing model metadata and performance metrics.
+    """
     __tablename__ = 'model_deployment'
+
     model_id = Column(Integer, primary_key=True, autoincrement=True)
     model_name = Column(String(255), nullable=False)
     deployment_date = Column(TIMESTAMP, nullable=False)
@@ -80,238 +61,254 @@ class ModelDeployment(Base):
     training_data_reference = Column(String(255))
     model_status = Column(String(50))
 
-# 3. Database Connection Setup
-def create_postgres_session(logger: logging.Logger) -> Optional[sessionmaker]:
+# -------------------------------------------------------------------
+# Logger Utility
+# -------------------------------------------------------------------
+def create_logger(project_root: Path) -> logging.Logger:
     """
-    Connect to the PostgreSQL database using SQLAlchemy and credentials from environment variables.
-    
-    Args:
-        logger (logging.Logger): Logger object for logging.
-    
-    Returns:
-        SQLAlchemy sessionmaker instance if successful, None otherwise.
+    Creates a logger with rotating file handlers for the model_deployment_manager.
     """
-    try:
-        # Fetch database credentials from environment variables
-        POSTGRES_HOST = os.getenv('POSTGRES_HOST', 'localhost')
-        POSTGRES_DBNAME = os.getenv('POSTGRES_DBNAME', 'trading_robot_plug')
-        POSTGRES_USER = os.getenv('POSTGRES_USER', 'postgres')
-        POSTGRES_PASSWORD = os.getenv('POSTGRES_PASSWORD', 'password')
-        POSTGRES_PORT = os.getenv('POSTGRES_PORT', '5432')
+    log_name = "model_deployment_manager"
+    logger = logging.getLogger(log_name)
+    logger.setLevel(logging.DEBUG)
 
-        # Construct the PostgreSQL connection string
-        DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DBNAME}"
-        logger.debug(f"Connecting to PostgreSQL with DATABASE_URL: {DATABASE_URL}")
+    log_dir = project_root / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"{log_name}.log"
 
-        engine = create_engine(DATABASE_URL, pool_size=10, max_overflow=20)
+    if not logger.handlers:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
 
-        # Create all tables if not already created
-        Base.metadata.create_all(engine)
-        logger.info("PostgreSQL connection established and tables ensured.")
-
-        # Return session maker
-        return sessionmaker(bind=engine)
-    except SQLAlchemyError as e:
-        logger.error(f"Error connecting to PostgreSQL database: {e}")
-        return None
-
-# 4. Fetch and Save Models
-def fetch_top_models(session, limit: int, logger: logging.Logger) -> Optional[List[Dict]]:
-    """
-    Retrieves the top-performing models based on accuracy, sharpe_ratio, and precision.
-    
-    Args:
-        session: SQLAlchemy session object.
-        limit (int): Number of top models to retrieve.
-        logger (logging.Logger): Logger object for logging.
-    
-    Returns:
-        List of top model dictionaries or None if an error occurs.
-    """
-    try:
-        logger.debug("Attempting to retrieve top models from the database.")
-        top_models = session.query(
-            ModelDeployment.model_id,
-            ModelDeployment.model_name,
-            ModelDeployment.accuracy,
-            ModelDeployment.precision,
-            ModelDeployment.sharpe_ratio,
-            ModelDeployment.deployment_date
-        ).order_by(
-            ModelDeployment.accuracy.desc(),
-            ModelDeployment.sharpe_ratio.desc(),
-            ModelDeployment.precision.desc()
-        ).limit(limit).all()
-
-        logger.info(f"Retrieved {len(top_models)} top models successfully.")
-        return [model._asdict() for model in top_models]
-    except SQLAlchemyError as e:
-        logger.error(f"Error retrieving top models: {e}")
-        return None
-
-def save_model(session, model_data: Dict, logger: logging.Logger) -> bool:
-    """
-    Saves a new model deployment record to PostgreSQL.
-    
-    Args:
-        session: SQLAlchemy session object.
-        model_data (dict): Dictionary containing model deployment data.
-        logger (logging.Logger): Logger object for logging.
-    
-    Returns:
-        True if the model was saved successfully, False otherwise.
-    """
-    try:
-        logger.debug(f"Attempting to save model: {model_data['model_name']}")
-        model = ModelDeployment(
-            model_name=model_data['model_name'],
-            deployment_date=model_data['deployment_date'],
-            description=model_data.get('description'),
-            model_version=model_data.get('model_version'),
-            model_type=model_data.get('model_type'),
-            performance_metrics=model_data.get('performance_metrics'),
-            accuracy=model_data.get('accuracy'),
-            precision=model_data.get('precision'),
-            sharpe_ratio=model_data.get('sharpe_ratio'),
-            serialized_model=model_data['serialized_model'],
-            training_data_reference=model_data.get('training_data_reference'),
-            model_status=model_data.get('model_status')
+        file_handler = RotatingFileHandler(
+            filename=log_file,
+            maxBytes=5 * 1024 * 1024,
+            backupCount=3
         )
-        session.add(model)
-        session.commit()
-        logger.info(f"Model '{model_data['model_name']}' saved successfully.")
-        return True
-    except SQLAlchemyError as e:
-        session.rollback()
-        logger.error(f"Error saving model: {e}")
-        return False
+        file_handler.setLevel(logging.DEBUG)
 
-# 5. Ensure Model Deployment Table Exists
-def create_model_deployment_table(engine, logger: logging.Logger):
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        console_handler.setFormatter(formatter)
+        file_handler.setFormatter(formatter)
+
+        logger.addHandler(console_handler)
+        logger.addHandler(file_handler)
+
+    return logger
+
+# -------------------------------------------------------------------
+# Class-Based Manager
+# -------------------------------------------------------------------
+class ModelDeploymentManager:
     """
-    Ensures that the model_deployment table exists in the PostgreSQL database.
-    
-    Args:
-        engine: SQLAlchemy engine connected to the database.
-        logger (logging.Logger): Logger object for logging.
+    A class to handle model deployments, including:
+    - Table creation
+    - Fetching top models
+    - Saving new model records
+    - Future expansions (analytics, multi-region, advanced logs)
     """
-    create_table_query = '''
-    CREATE TABLE IF NOT EXISTS model_deployment (
-        model_id SERIAL PRIMARY KEY,
-        model_name TEXT NOT NULL,
-        deployment_date TIMESTAMP NOT NULL,
-        description TEXT,
-        model_version TEXT,
-        model_type TEXT,
-        performance_metrics JSONB,
-        accuracy REAL,
-        precision REAL,
-        sharpe_ratio REAL,
-        serialized_model BYTEA NOT NULL,
-        training_data_reference TEXT,
-        model_status TEXT
-    );
-    '''
-    try:
-        logger.debug("Attempting to create or verify the model_deployment table.")
-        with engine.connect() as connection:
-            connection.execute(create_table_query)
-            logger.info("Model deployment table created or verified successfully.")
-    except SQLAlchemyError as e:
-        logger.error(f"Error creating model deployment table: {e}")
 
-# -----------------------------
-# Main Script
-# -----------------------------
+    def __init__(self, logger: logging.Logger):
+        """
+        Initializes the manager, sets up environment variables, and loads DB session.
+        """
+        self.logger = logger
+        self.session_factory = None
 
+        # Attempt to connect to DB via environment
+        # The actual connection is done in create_postgres_session
+        self.logger.debug("[ModelDeploymentManager] Initialized. Call 'connect_to_db' to finalize DB connection.")
+
+    def connect_to_db(self) -> bool:
+        """
+        Creates a PostgreSQL session factory using environment variables.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            POSTGRES_HOST = os.getenv('POSTGRES_HOST', 'localhost')
+            POSTGRES_DBNAME = os.getenv('POSTGRES_DBNAME', 'trading_robot_plug')
+            POSTGRES_USER = os.getenv('POSTGRES_USER', 'postgres')
+            POSTGRES_PASSWORD = os.getenv('POSTGRES_PASSWORD', 'password')
+            POSTGRES_PORT = os.getenv('POSTGRES_PORT', '5432')
+
+            database_url = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DBNAME}"
+            self.logger.debug(f"[ModelDeploymentManager] Connecting to {database_url}")
+
+            engine = create_engine(database_url, pool_size=10, max_overflow=20)
+            Base.metadata.create_all(engine)  # Ensure 'model_deployment' table
+            self.logger.info("[ModelDeploymentManager] DB connection established, tables verified.")
+
+            self.session_factory = sessionmaker(bind=engine)
+            return True
+        except SQLAlchemyError as e:
+            self.logger.error(f"[ModelDeploymentManager] Error connecting to PostgreSQL: {e}")
+            return False
+
+    def create_table_if_not_exists(self) -> None:
+        """
+        Ensures the model_deployment table exists in the database.
+        Useful if the table might be missing. Typically called automatically in `connect_to_db`.
+        """
+        try:
+            # This is largely redundant if Base.metadata.create_all was called,
+            # but you can add custom DDL checks here if needed.
+            self.logger.debug("[ModelDeploymentManager] create_table_if_not_exists is a placeholder. 'Base.metadata.create_all' is used.")
+        except Exception as e:
+            self.logger.error(f"[ModelDeploymentManager] Error ensuring table creation: {e}")
+
+    def fetch_top_models(self, limit: int = 5) -> Optional[List[Dict]]:
+        """
+        Retrieves top-performing models from 'model_deployment' table, sorted by accuracy, sharpe_ratio, precision.
+
+        Returns:
+            A list of dictionaries describing each model, or None on error.
+        """
+        if not self.session_factory:
+            self.logger.error("[ModelDeploymentManager] Session factory is None; call 'connect_to_db' first.")
+            return None
+
+        session = self.session_factory()
+        try:
+            self.logger.debug("[ModelDeploymentManager] Fetching top models from DB.")
+            results = session.query(
+                ModelDeployment.model_id,
+                ModelDeployment.model_name,
+                ModelDeployment.accuracy,
+                ModelDeployment.precision,
+                ModelDeployment.sharpe_ratio,
+                ModelDeployment.deployment_date
+            ).order_by(
+                ModelDeployment.accuracy.desc(),
+                ModelDeployment.sharpe_ratio.desc(),
+                ModelDeployment.precision.desc()
+            ).limit(limit).all()
+
+            self.logger.info(f"[ModelDeploymentManager] Retrieved {len(results)} top models.")
+            return [row._asdict() for row in results]
+        except SQLAlchemyError as e:
+            self.logger.error(f"[ModelDeploymentManager] Error fetching top models: {e}")
+            return None
+        finally:
+            session.close()
+
+    def save_model(self, model_data: Dict) -> bool:
+        """
+        Saves a new model record into 'model_deployment' table.
+
+        Args:
+            model_data (Dict): Must contain at least:
+                - 'model_name' (str)
+                - 'deployment_date' (datetime)
+                - 'serialized_model' (bytes)
+                - 'accuracy', 'precision', 'sharpe_ratio' (floats)
+                - any other relevant fields.
+        Returns:
+            bool: True if saved successfully, False otherwise.
+        """
+        if not self.session_factory:
+            self.logger.error("[ModelDeploymentManager] Session factory is None; call 'connect_to_db' first.")
+            return False
+
+        session = self.session_factory()
+        try:
+            self.logger.debug(f"[ModelDeploymentManager] Saving model: {model_data.get('model_name', 'Unknown')}")
+            record = ModelDeployment(
+                model_name=model_data['model_name'],
+                deployment_date=model_data['deployment_date'],
+                description=model_data.get('description'),
+                model_version=model_data.get('model_version'),
+                model_type=model_data.get('model_type'),
+                performance_metrics=model_data.get('performance_metrics'),
+                accuracy=model_data.get('accuracy'),
+                precision=model_data.get('precision'),
+                sharpe_ratio=model_data.get('sharpe_ratio'),
+                serialized_model=model_data['serialized_model'],
+                training_data_reference=model_data.get('training_data_reference'),
+                model_status=model_data.get('model_status')
+            )
+            session.add(record)
+            session.commit()
+            self.logger.info(f"[ModelDeploymentManager] Model '{model_data.get('model_name', 'Unknown')}' saved successfully.")
+            return True
+        except SQLAlchemyError as e:
+            session.rollback()
+            self.logger.error(f"[ModelDeploymentManager] Error saving model: {e}")
+            return False
+        finally:
+            session.close()
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # Future expansions for long-term goals:
+    # 1. Remote replication across multiple regions or DB servers
+    # 2. Advanced analytics: e.g., combine multiple performance metrics
+    # 3. Automatic model archiving after certain conditions
+    # 4. Subscription-based notifications on new top models
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# -------------------------------------------------------------------
+# Example Usage
+# -------------------------------------------------------------------
 def main():
     """
-    Main function that ensures the model_deployment table exists, 
-    retrieves top models, and saves new models to PostgreSQL.
+    Demonstrates usage of ModelDeploymentManager: connecting to DB, 
+    fetching top models, and saving a new model example.
+    Extended with placeholders for long-term expansions.
     """
-    try:
-        # Define project root
-        project_root = Path(__file__).resolve().parents[2]
-        
-        # Setup logging
-        log_dir = project_root / 'logs'
-        logger = setup_logging('model_deployment_manager', log_dir)
+    # Setup environment
+    project_root = Path(__file__).resolve().parents[2]
+    env_path = project_root / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+    else:
+        print("[model_deployment_manager] No .env found; using environment variables as-is.")
 
-        # Load environment variables
-        env_path = project_root / '.env'
-        load_dotenv(dotenv_path=env_path)
-        logger.debug("Environment variables loaded.")
+    # Create logger
+    logger = create_logger(project_root)
+    logger.info("[model_deployment_manager] Starting main demonstration of ModelDeploymentManager.")
 
-        # Connect to PostgreSQL
-        session_factory = create_postgres_session(logger)
-        if not session_factory:
-            logger.error("Failed to create a session factory.")
-            sys.exit(1)
-        session = session_factory()
-        engine = session.bind  # Get the engine from the session
+    # Instantiate manager
+    manager = ModelDeploymentManager(logger=logger)
 
-        # Ensure model_deployment table exists
-        create_model_deployment_table(engine, logger)
-
-        # Example: Fetch top 5 models
-        top_models = fetch_top_models(session, limit=5, logger=logger)
-        if top_models is not None:
-            logger.info(f"Top Models: {top_models}")
-            print("Top Models Retrieved Successfully:")
-            for model in top_models:
-                print(model)
-        else:
-            logger.error("Failed to retrieve top models.")
-
-        # Example: Save a new model
-        new_model_data = {
-            'model_name': 'Neural Network v2',
-            'deployment_date': datetime.now(),
-            'description': 'A neural network trained on stock data for AAPL, GOOGL, MSFT',
-            'model_version': '2.0',
-            'model_type': 'neural_network',
-            'performance_metrics': {
-                'accuracy': 0.89,
-                'precision': 0.85,
-                'sharpe_ratio': 1.5
-            },
-            'accuracy': 0.89,
-            'precision': 0.85,
-            'sharpe_ratio': 1.5,
-            'serialized_model': b'\x80\x04\x95\x19\x00\x00\x00\x00\x00\x00\x00\x8c\x08builtins\x94\x8c\x08Ellipsis\x94\x93\x94.',
-            'training_data_reference': 'historical_stock_data',
-            'model_status': 'active'
-        }
-        save_success = save_model(session, new_model_data, logger)
-        if save_success:
-            print(f"Model '{new_model_data['model_name']}' saved successfully.")
-        else:
-            print(f"Failed to save model '{new_model_data['model_name']}'. Check logs for details.")
-
-    except Exception as e:
-        logger.error(f"Unexpected error in main: {e}")
-        print(f"An unexpected error occurred: {e}")
+    # Connect to DB
+    if not manager.connect_to_db():
+        logger.error("[model_deployment_manager] Could not establish DB connection. Exiting.")
         sys.exit(1)
-    finally:
-        # Close the SQLAlchemy session
-        try:
-            session.close()
-            logger.info("Database session closed successfully.")
-        except Exception as e:
-            logger.error(f"Error closing session: {e}")
 
-# -----------------------------
-# Example Usage
-# -----------------------------
+    # (Optional) explicitly ensure table
+    manager.create_table_if_not_exists()
+
+    # Fetch top models
+    top_models = manager.fetch_top_models(limit=5)
+    if top_models is not None:
+        logger.info("[model_deployment_manager] Top 5 Models:")
+        for m in top_models:
+            logger.info(m)
+    else:
+        logger.warning("[model_deployment_manager] Could not fetch top models.")
+
+    # Demonstrate saving a new model
+    example_model_data = {
+        'model_name': 'Awesome Model v2',
+        'deployment_date': datetime.now(),
+        'description': 'Demo model with new architecture for alpha signals.',
+        'model_version': '2.0',
+        'model_type': 'neural_network',
+        'performance_metrics': {
+            'accuracy': 0.91,
+            'precision': 0.86,
+            'sharpe_ratio': 1.8
+        },
+        'accuracy': 0.91,
+        'precision': 0.86,
+        'sharpe_ratio': 1.80,
+        'serialized_model': b'\x80\x04\x95\x11\x00\x00\x00\x00\x00\x00\x00C\rNewBinaryData\x94.',
+        'training_data_reference': 'v2_dataset_ref',
+        'model_status': 'active'
+    }
+    if manager.save_model(example_model_data):
+        logger.info(f"[model_deployment_manager] '{example_model_data['model_name']}' saved successfully.")
+    else:
+        logger.warning(f"[model_deployment_manager] Failed to save '{example_model_data['model_name']}'.")
 
 if __name__ == "__main__":
     main()
-
-# -------------------------------------------------------------------
-# Future Improvements:
-#     - Add functions for retrieving options contracts and placing orders.
-#     - Integrate options exercise functionality with validations.
-#     - Implement WebSocket listeners for real-time data and account updates.
-#     - Support more granular logging and error handling for Alpaca API interactions.
-#     - Add user input options for dynamic symbol fetching and order placements.
-# -------------------------------------------------------------------
