@@ -2,7 +2,7 @@
 # File Path: D:/TradingRobotPlug2/src/Data_Processing/Technical_Indicators/trend_indicators.py
 # Description: Provides trend indicators (Moving Averages, MACD, ADX,
 # Ichimoku Cloud, Parabolic SAR, and Bollinger Width). Integrates with
-# the project’s ConfigManager, DatabaseHandler, ColumnUtils, and logging setup.
+# the project's ConfigManager, DatabaseHandler, ColumnUtils, and logging setup.
 # All DataFrame columns are standardized to lowercase.
 # -------------------------------------------------------------------
 
@@ -426,81 +426,196 @@ class TrendIndicators:
     """
     Encapsulates all trend indicators and provides a composable interface to apply them.
     """
-    def __init__(self, data_store: DataStore, pipeline: Optional[IndicatorPipeline] = None, logger: Optional[logging.Logger] = None):
-        self.logger = logger or logging.getLogger(__class__.__name__)
-        self.pipeline = pipeline or IndicatorPipeline(logger=self.logger)
+    def __init__(self, logger=None, data_store=None):
+        """
+        Initializes TrendIndicators with optional logger and data_store.
+        """
+        self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.data_store = data_store
-        self.logger.info(f"[{script_name}] TrendIndicators instance created with data_store.")
+        self.logger.info(f"[{script_name}] TrendIndicators initialized.")
 
-        # Initialize and add indicators to the pipeline
-        self.initialize_indicators()
-
-    def initialize_indicators(self):
-        """Initialize and add all desired trend indicators to the pipeline."""
-        self.logger.info(f"[{script_name}] Initializing trend indicators.")
-
+    def set_datetime_index(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Sets the 'date' or 'Date' column as the DatetimeIndex and sorts the DataFrame.
+        """
+        self.logger.info(f"[{script_name}] Setting 'Date' as DatetimeIndex.")
+        
         try:
-            self.add_indicator(MovingAverageIndicator(window_size=10, ma_type="SMA", handle_nans='ffill', logger=self.logger))
-            self.add_indicator(MovingAverageIndicator(window_size=20, ma_type="EMA", handle_nans='ffill', logger=self.logger))
-            self.add_indicator(MACDIndicatorClass(logger=self.logger))
-            self.add_indicator(ADXIndicatorClass(window=14, handle_nans='ffill', logger=self.logger))
-            self.add_indicator(IchimokuCloudIndicatorClass(nine_period=9, twenty_six_period=26, fifty_two_period=52, handle_nans='ffill', logger=self.logger))
-            self.add_indicator(PSARIndicatorClass(step=0.02, max_step=0.2, handle_nans='ffill', logger=self.logger))
-            self.add_indicator(BollingerWidthIndicator(window=20, window_dev=2.0, price_column="close", handle_nans='ffill', logger=self.logger))
-            self.logger.info(f"[{script_name}] All trend indicators added to the pipeline.")
+            if 'date' in df.columns:
+                # Convert to datetime with coercion and handle invalid dates
+                df['date'] = pd.to_datetime(df['date'], errors='coerce')
+                invalid_dates = df['date'].isna().sum()
+                self.logger.warning(f"Found {invalid_dates} invalid dates in 'date' column before dropping.")
+                
+                # Drop NaT values and duplicates
+                original_len = len(df)
+                df = df.dropna(subset=['date']).drop_duplicates(subset=['date']).set_index('date').sort_index()
+                df.rename_axis('Date', inplace=True)
+                dropped_rows = original_len - len(df)
+                if dropped_rows > 0:
+                    self.logger.warning(f"Dropped {dropped_rows} rows with invalid/duplicate dates")
+            
+            elif 'Date' in df.columns:
+                # Similar handling for 'Date' column
+                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+                invalid_dates = df['Date'].isna().sum()
+                self.logger.warning(f"Found {invalid_dates} invalid dates in 'Date' column before dropping.")
+                
+                original_len = len(df)
+                df = df.dropna(subset=['Date']).drop_duplicates(subset=['Date']).set_index('Date').sort_index()
+                df.rename_axis('Date', inplace=True)
+                dropped_rows = original_len - len(df)
+                if dropped_rows > 0:
+                    self.logger.warning(f"Dropped {dropped_rows} rows with invalid/duplicate dates")
+            
+            self.logger.info(f"[{script_name}] 'Date' set as DatetimeIndex. {len(df)} records remain after cleaning.")
+            return df
+            
         except Exception as e:
-            self.logger.error(f"[{script_name}] Error initializing indicators: {e}", exc_info=True)
-
-    def add_indicator(self, indicator: Indicator):
-        self.pipeline.add_indicator(indicator)
-
-    def remove_indicator(self, indicator_cls):
-        self.pipeline.remove_indicator(indicator_cls)
+            self.logger.error(f"Error setting datetime index: {e}", exc_info=True)
+            raise
 
     def apply_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        self.logger.info(f"[{script_name}] Starting to apply TrendIndicators pipeline.")
-
-        # 1) Process the DataFrame using ColumnUtils
-        try:
-            column_config_path = project_root / 'src' / 'Utilities' / 'column_config.json'
-            # Define required columns for trend indicators
-            required_columns = [
-                'close',
-                'high',
-                'low',
-                'macd_line',
-                'macd_signal',
-                'macd_histogram',
-                'rsi',
-                'bollinger_width',
-                'date'
-            ]
-            df = ColumnUtils.process_dataframe(
-                df,
-                config_path=column_config_path,
-                required_columns=required_columns,
-                logger=self.logger
-            )
-            self.logger.info("DataFrame processed with ColumnUtils.")
-        except (KeyError, FileNotFoundError, ValueError) as ve:
-            self.logger.error(f"[{script_name}] Data processing failed: {ve}")
+        """
+        Applies all trend indicators to the DataFrame.
+        """
+        self.logger.info(f"[{script_name}] Applying Trend Indicators...")
+        
+        # Log initial shape
+        self.logger.info(f"Initial DataFrame shape: {df.shape}")
+        
+        required_columns = ['close', 'high', 'low']
+        if not all(col in df.columns for col in required_columns):
+            self.logger.error(f"[{script_name}] DataFrame missing columns: {required_columns}")
             return df
 
-        # 2) Apply pipeline of indicators
-        df = self.pipeline.apply(df)
+        try:
+            # Set datetime index with enhanced validation
+            df = self.set_datetime_index(df)
+            
+            # Apply trend indicators
+            df = self.add_moving_averages(df)
+            df = self.add_macd(df)
+            df = self.add_adx(df)
+            df = self.add_ichimoku(df)
+            df = self.add_parabolic_sar(df)
+            
+            # Reset the index to move 'Date' back to a column before saving
+            df = df.reset_index()
+            
+            # Log final shape
+            self.logger.info(f"Final DataFrame shape after applying indicators: {df.shape}")
+            
+            self.logger.info(f"[{script_name}] Successfully applied all trend indicators.")
+        except Exception as e:
+            self.logger.error(f"[{script_name}] Error applying Trend Indicators: {e}", exc_info=True)
 
-        # 3) Ensure MACD is calculated correctly (if not already handled by ColumnUtils)
-        if 'macd_line' not in df.columns:
-            self.logger.warning(f"[{script_name}] 'macd_line' missing after applying indicators. Attempting manual calculation.")
-            df['macd_line'] = df['close'].ewm(span=12, adjust=False).mean() - df['close'].ewm(span=26, adjust=False).mean()
+        return df
 
-            if 'macd_line' not in df.columns:
-                self.logger.error(f"[{script_name}] Failed to calculate 'macd_line' manually.")
+    def add_moving_averages(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Adds various moving averages (SMA, EMA, etc.).
+        """
+        self.logger.info(f"[{script_name}] Adding Moving Averages")
+        try:
+            import pandas_ta as ta  # Import inside method to avoid collisions
 
-        # Similarly, ensure other required columns are present or calculate manually if needed
-        # (This step can be expanded based on your requirements)
+            # Add SMAs
+            for period in [20, 50, 200]:
+                df[f'sma_{period}'] = ta.sma(df['close'], length=period).astype('float32')
+            
+            # Add EMAs
+            for period in [12, 26]:
+                df[f'ema_{period}'] = ta.ema(df['close'], length=period).astype('float32')
+            
+            self.logger.info(f"[{script_name}] Successfully added Moving Averages")
+        except Exception as e:
+            self.logger.error(f"Error calculating Moving Averages: {e}", exc_info=True)
+        
+        return df
 
-        self.logger.info(f"[{script_name}] Completed applying TrendIndicators pipeline.")
+    def add_macd(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Adds MACD indicator.
+        """
+        self.logger.info(f"[{script_name}] Adding MACD")
+        try:
+            import pandas_ta as ta
+
+            macd = ta.macd(df['close'])
+            if macd is not None:
+                df['macd_line'] = macd['MACD_12_26_9'].astype('float32')
+                df['macd_signal'] = macd['MACDs_12_26_9'].astype('float32')
+                df['macd_histogram'] = macd['MACDh_12_26_9'].astype('float32')
+                self.logger.info(f"[{script_name}] Successfully added MACD")
+        except Exception as e:
+            self.logger.error(f"Error calculating MACD: {e}", exc_info=True)
+        
+        return df
+
+    def add_adx(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Adds ADX indicator.
+        """
+        self.logger.info(f"[{script_name}] Adding ADX")
+        try:
+            import pandas_ta as ta
+
+            adx_data = ta.adx(df['high'], df['low'], df['close'])
+            if adx_data is not None:
+                df['adx'] = adx_data['ADX_14'].astype('float32')
+                df['+di'] = adx_data['DMP_14'].astype('float32')
+                df['-di'] = adx_data['DMN_14'].astype('float32')
+                self.logger.info(f"[{script_name}] Successfully added ADX")
+        except Exception as e:
+            self.logger.error(f"Error calculating ADX: {e}", exc_info=True)
+
+        return df
+
+    def add_ichimoku(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Adds Ichimoku Cloud.
+        """
+        self.logger.info(f"[{script_name}] Adding Ichimoku Cloud")
+        try:
+            import pandas_ta as ta
+
+            # Get the Ichimoku Cloud data
+            ichimoku_data = ta.ichimoku(df['high'], df['low'], df['close'])
+
+            # Check if the output is a tuple and handle accordingly
+            if isinstance(ichimoku_data, tuple):
+                for item in ichimoku_data:
+                    if isinstance(item, pd.DataFrame):
+                        for col in item.columns:
+                            df[col] = item[col].astype('float32')
+                    elif isinstance(item, pd.Series):
+                        df[item.name] = item.astype('float32')
+                self.logger.info(f"[{script_name}] Successfully added Ichimoku")
+            else:
+                self.logger.error(f"[{script_name}] Unexpected Ichimoku output format: {ichimoku_data}")
+        except Exception as e:
+            self.logger.error(f"Error calculating Ichimoku Cloud: {e}", exc_info=True)
+
+        return df
+
+    def add_parabolic_sar(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Adds Parabolic SAR.
+        """
+        self.logger.info(f"[{script_name}] Adding Parabolic SAR")
+        try:
+            import pandas_ta as ta
+
+            psar_data = ta.psar(df['high'], df['low'], df['close'], step=0.02, max_step=0.2)
+            if psar_data is not None:
+                # pandas_ta returns multiple columns for psar. Typically PSAR might be psar, psl, psarup, psardown, etc.
+                # Adjust as needed
+                df['psar'] = psar_data['PSARl_0.02_0.2']  # example
+                self.logger.info(f"[{script_name}] Successfully added Parabolic SAR")
+        except Exception as e:
+            self.logger.error(f"Error calculating Parabolic SAR: {e}", exc_info=True)
+
         return df
 
     def load_data_from_sql(self, symbol: str) -> Optional[pd.DataFrame]:
@@ -549,18 +664,22 @@ class TrendIndicators:
             file_path (str): Path to the input CSV file.
             chunksize (int, optional): Number of rows per chunk. Defaults to 50000.
         """
+        from multiprocessing import Pool, cpu_count
+        from time import perf_counter as timer
+
         self.logger.info(f"Starting chunked processing for {file_path} (chunksize={chunksize})")
         start_time = timer()
 
         try:
             pool = Pool(cpu_count())
+            import pandas as pd
             reader = pd.read_csv(
-                file_path, 
-                chunksize=chunksize, 
+                file_path,
+                chunksize=chunksize,
                 dtype={
-                    'close': 'float32', 
-                    'high': 'float32', 
-                    'low': 'float32', 
+                    'close': 'float32',
+                    'high': 'float32',
+                    'low': 'float32',
                     'volume': 'int32'
                 }
             )
@@ -586,6 +705,8 @@ class TrendIndicators:
             data_stream (iterable): An iterable stream of data points.
             window_size (int, optional): The size of the sliding window. Defaults to 20.
         """
+        from collections import deque
+
         self.logger.info("Starting streaming data processing.")
         buffer = deque(maxlen=window_size)
 
@@ -616,23 +737,40 @@ class TrendIndicators:
             df[col] = pd.to_numeric(df[col], downcast='integer')
         return df
 
-    def set_datetime_index(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Sets 'Date' as the DatetimeIndex and removes duplicates.
-        """
-        self.logger.info(f"[{script_name}] Setting 'Date' as DatetimeIndex.")
-        try:
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-            df = df.set_index('Date').sort_index()
 
-            # Remove duplicate indices
-            if df.index.duplicated().any():
-                self.logger.warning("Duplicate 'Date' entries found. Removing duplicates.")
-                df = df[~df.index.duplicated(keep='last')]
-                self.logger.info("Duplicate 'Date' entries removed.")
+# -------------------------------------------------------------------
+# EXAMPLE USAGE
+# -------------------------------------------------------------------
+if __name__ == "__main__":
+    """
+    Example usage of the TrendIndicators class to load data, apply 
+    multiple trend indicators, and save or display the resulting DataFrame.
+    """
 
-            self.logger.info(f"[{script_name}] 'Date' set as DatetimeIndex.")
-            return df
-        except Exception as e:
-            self.logger.error(f"[{script_name}] Failed to set 'Date' as DatetimeIndex: {e}", exc_info=True)
-            raise
+    logger.info(f"[{script_name}] Entering example usage section...")
+
+    # 1. Instantiate the DataStore (ensure your environment configs are correct)
+    data_store = DataStore(logger=logger)
+
+    # 2. Create a TrendIndicators instance
+    trend_indicators = TrendIndicators(logger=logger, data_store=data_store)
+
+    # 3. Load data for a sample symbol from the SQL database (e.g., "AAPL")
+    symbol = "AAPL"
+    df = data_store.load_data(symbol=symbol)
+
+    if df is None or df.empty:
+        logger.warning(f"[{script_name}] No data found for symbol '{symbol}'. Exiting example.")
+    else:
+        # 4. Apply the trend indicators
+        df_with_indicators = trend_indicators.apply_indicators(df)
+
+        # 5. Optionally, save the resulting DataFrame back to the database
+        data_store.save_data(df_with_indicators, symbol=symbol, overwrite=True)
+        logger.info(f"[{script_name}] Trend indicators applied and saved to DB for '{symbol}'.")
+
+        # 6. Print a sample of the resulting DataFrame
+        print("\n[trend_indicators.py] Sample of DataFrame with Trend Indicators:")
+        print(df_with_indicators.tail())
+        
+    logger.info(f"[{script_name}] Example usage section complete.")

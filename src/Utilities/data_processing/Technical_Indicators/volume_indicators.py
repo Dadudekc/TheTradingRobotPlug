@@ -17,6 +17,9 @@ from multiprocessing import Pool, cpu_count
 from collections import deque
 from functools import partial
 from Utilities.data_processing.base_indicators import BaseIndicator
+from Utilities.data_processing.preprocessing.dtype_validator import DtypeValidator
+from Utilities.data_processing.preprocessing.dtype_handler import enforce_dtype
+
 
 # -------------------------------------------------------------------
 # Project Path Setup
@@ -94,14 +97,16 @@ class VolumeIndicators(BaseIndicator):
     Applies volume-based technical indicators (MFI, OBV, VWAP, ADL, CMF, Volume Oscillator).
     """
 
-    def __init__(self, logger=None):
+    def __init__(self, logger, data_store):
         """
-        Initializes the VolumeIndicators class with an optional logger.
+        Initializes the VolumeIndicators class with an optional logger and data_store.
         
         Args:
             logger (logging.Logger, optional): Logger instance for logging.
+            data_store (DataStore): DataStore instance for saving data.
         """
         super().__init__(logger)
+        self.data_store = data_store
         self.logger.info("VolumeIndicators initialized.")
     
     def downcast_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -117,26 +122,31 @@ class VolumeIndicators(BaseIndicator):
 
         self.logger.info("Downcasting completed.")
         return df
-    
+
     def set_datetime_index(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Sets the 'date' or 'Date' column as the DatetimeIndex and sorts the DataFrame.
+        Sets the 'date' column as the index and ensures it is unique and sorted.
         """
         self.logger.info("Setting 'Date' as DatetimeIndex.")
+
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            df = df.dropna(subset=['date'])  # Drop NaT values
+            df = df.drop_duplicates(subset=['date'])  # Drop duplicate dates
             df = df.set_index('date').sort_index()
             df.rename_axis('Date', inplace=True)
         elif 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            df = df.dropna(subset=['Date'])  # Drop NaT values
+            df = df.drop_duplicates(subset=['Date'])  # Drop duplicate dates
             df = df.set_index('Date').sort_index()
         else:
             self.logger.error("No 'date' or 'Date' column found in DataFrame.")
             raise KeyError("Date column missing")
 
-        self.logger.info("'Date' set as DatetimeIndex.")
+        self.logger.info(f"'Date' set as DatetimeIndex. {len(df)} records remain after removing NaTs and duplicates.")
         return df
-
+    
     def add_money_flow_index(self, df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
         """
         Adds Money Flow Index (MFI) to the DataFrame.
@@ -146,12 +156,31 @@ class VolumeIndicators(BaseIndicator):
         self._validate_columns(df, required)
 
         try:
-            mfi = ta.mfi(high=df['high'], low=df['low'], close=df['close'], volume=df['volume'], length=window)
-            df['mfi'] = mfi.fillna(0).astype('float32')
-            self.logger.info("Successfully added MFI")
+            # If an old 'mfi' column exists, drop it.
+            if 'mfi' in df.columns:
+                self.logger.debug("Dropping pre-existing 'mfi' column")
+                df = df.drop(columns=['mfi'])
+
+            # Calculate the MFI using pandas_ta, ensuring volume is float64
+            mfi_series = ta.mfi(
+                high=df['high'],
+                low=df['low'],
+                close=df['close'],
+                volume=df['volume'].astype('float64'),  # Convert volume to float64 before calculation
+                length=window
+            )
+
+            # Fill NaN values with 0 and cast to float32 to match dtype_handler expectations
+            df['mfi'] = mfi_series.fillna(0).astype('float32')
+            
+            # Store the float32 conversion in a new column for comparison
+            df['mfi_new'] = mfi_series.astype('float32')
+
+            self.logger.info("Successfully added MFI and MFI_NEW")
         except Exception as e:
             self.logger.error(f"Failed to calculate MFI: {e}", exc_info=True)
-            df['mfi'] = 0.0  # Assign default value or handle as needed
+            df['mfi'] = 0.0  # fallback if error occurs
+            df['mfi_new'] = 0.0  # fallback if error occurs
 
         return df
 
@@ -180,8 +209,9 @@ class VolumeIndicators(BaseIndicator):
         self._validate_columns(df, ['high', 'low', 'close', 'volume'])
 
         try:
+            df = df.sort_index()  # Ensure VWAP is computed on sorted data
             vwap = ta.vwap(high=df['high'], low=df['low'], close=df['close'], volume=df['volume'])
-            df['vwap'] = vwap.fillna(method='ffill').fillna(0).astype('float32')
+            df['vwap'] = vwap.ffill().fillna(0).astype('float32')  # Replace deprecated fillna method
             self.logger.info("Successfully added VWAP")
         except Exception as e:
             self.logger.error(f"Failed to calculate VWAP: {e}", exc_info=True)
@@ -197,8 +227,8 @@ class VolumeIndicators(BaseIndicator):
         self._validate_columns(df, ['close', 'low', 'high', 'volume'])
 
         try:
-            adl = ta.adl(high=df['high'], low=df['low'], close=df['close'], volume=df['volume'])
-            df['adl'] = adl.fillna(method='ffill').fillna(0).astype('float32')
+            adl = ta.ad(high=df['high'], low=df['low'], close=df['close'], volume=df['volume'])
+            df['adl'] = adl.ffill().fillna(0).astype('float32')  # Updated fillna usage
             self.logger.info("Successfully added ADL")
         except Exception as e:
             self.logger.error(f"Failed to calculate ADL: {e}", exc_info=True)
@@ -267,6 +297,9 @@ class VolumeIndicators(BaseIndicator):
             df = self.add_chaikin_money_flow(df)
             df = self.add_volume_oscillator(df)
             self.logger.info("Successfully applied all Volume Indicators.")
+
+            # After computing indicators, enforce dtype globally
+            df = enforce_dtype(df)
         except Exception as e:
             self.logger.error(f"Error applying Volume Indicators: {e}", exc_info=True)
 
@@ -344,17 +377,41 @@ class VolumeIndicators(BaseIndicator):
             except Exception as e:
                 self.logger.error(f"Error processing streaming data point: {e}", exc_info=True)
 
+    def save_data(self, df: pd.DataFrame, symbol: str, overwrite: bool = False):
+        """
+        Validate/fix dtypes with DtypeValidator, then save to DB.
+        """
+        self.logger.info(f"Saving data for {symbol} to SQL (upsert). Current shape: {df.shape}")
+
+        # Ensure date column
+        if 'date' not in df.columns and 'Date' not in df.index.names:
+            self.logger.error("No 'date' column found. Aborting save.")
+            return
+
+        if 'Date' in df.index.names:
+            df = df.reset_index()
+
+        # ✅ Step 1: Validate/fix
+        dtype_validator = DtypeValidator()
+        df = dtype_validator.validate_and_fix(df)
+
+        # ✅ Step 2: Save to database
+        try:
+            self.data_store.save_data(data=df, symbol=symbol, overwrite=overwrite)
+            self.logger.info(f"Data saved with volume indicators for '{symbol}'.")
+        except Exception as e:
+            self.logger.error(f"Error saving data: {e}", exc_info=True)
+
+
 # -------------------------------------------------------------------
 # Example Usage
 # -------------------------------------------------------------------
 def main():
     logger.info("Entering main() in volume_indicators.py")
     try:
-        # Initialize DatabaseHandler
+        # Initialize DatabaseHandler and DataStore
         db_handler = DBHandler(logger=logger)
         logger.info("DatabaseHandler initialized.")
-
-        # Initialize DataStore
         data_store = DataStore(config=config_manager, logger=logger, use_csv=False)
         logger.info("DataStore initialized.")
 
@@ -366,30 +423,22 @@ def main():
             logger.error(f"No data found for symbol '{symbol}'. Exiting.")
             return
 
-        # Process the DataFrame using ColumnUtils
-        # (only requiring the volume-related columns for this module)
-        try:
-            column_config_path = project_root / 'src' / 'Utilities' / 'column_config.json'
-            df = ColumnUtils.process_dataframe(
-                df,
-                config_path=column_config_path,
-                required_columns=required_columns,  # Only volume-based columns
-                logger=logger
-            )
-            logger.info("DataFrame processed with ColumnUtils.")
-        except (KeyError, FileNotFoundError, ValueError) as ve:
-            logger.error(f"Data processing failed: {ve}")
+        # Instantiate ColumnUtils and process the DataFrame
+        column_utils = ColumnUtils()
+        df = column_utils.process_dataframe(df, stage="pre")
+        logger.info("DataFrame processed with ColumnUtils.")
+
+        # **New Type Check**: Ensure df is a valid DataFrame
+        if not isinstance(df, pd.DataFrame):
+            logger.error(f"ColumnUtils.process_dataframe returned invalid type: {type(df)}. Exiting.")
             return
 
         # Initialize VolumeIndicators and apply them
-        volume_indicators = VolumeIndicators(logger=logger)
+        volume_indicators = VolumeIndicators(logger=logger, data_store=data_store)
         df = volume_indicators.apply_indicators(df)
 
-        # Display the updated data
-        expected_cols = [
-            "mfi", "obv", "vwap", "adl",
-            "cmf", "volume_oscillator"
-        ]
+        # Validate expected indicator columns
+        expected_cols = ["mfi", "obv", "vwap", "adl", "cmf", "volume_oscillator"]
         missing_cols = [col for col in expected_cols if col not in df.columns]
         if missing_cols:
             logger.error(f"Missing volume indicator columns: {missing_cols}")
@@ -398,8 +447,7 @@ def main():
             print(f"\n[volume_indicators.py] Sample Volume Indicators:\n", df[expected_cols].tail())
 
         # Save the modified data back to the SQL database
-        data_store.save_data(df, symbol=symbol, overwrite=True)
-        logger.info(f"Data saved with new volume indicators for symbol '{symbol}'.")
+        volume_indicators.save_data(df, symbol=symbol, overwrite=True)
 
     except Exception as e:
         logger.error(f"Unexpected error in main(): {e}", exc_info=True)

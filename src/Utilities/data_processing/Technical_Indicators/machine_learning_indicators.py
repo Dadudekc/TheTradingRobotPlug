@@ -17,6 +17,7 @@ from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 from dotenv import load_dotenv
 import sklearn
+import numpy as np
 
 # -------------------------------------------------------------------
 # Dynamically Identify Current File Name and Project Root
@@ -292,7 +293,10 @@ class MachineLearningIndicators(BaseIndicator):
             self.logger.info(f"[{script_name}] Applying proprietary model prediction.")
             self.validate_dataframe(df, required_columns=feature_columns, logger=self.logger)
 
-            X = df[feature_columns].values
+            # Ensure the feature columns match the model's expected features
+            expected_features = ['close', 'high', 'low']  # Adjust this list based on the model's training
+            X = df[expected_features].values
+
             if X.shape[1] != model.n_features_in_:
                 self.logger.error(f"[{script_name}] Feature mismatch: Model expects {model.n_features_in_} features, but got {X.shape[1]}.")
                 raise ValueError(f"Feature mismatch: Model expects {model.n_features_in_} features, but got {X.shape[1]}.")
@@ -307,7 +311,6 @@ class MachineLearningIndicators(BaseIndicator):
             return df
         except Exception as e:
             self.logger.error(f"[{script_name}] Failed to apply prediction: {e}", exc_info=True)
-            # Decide whether to raise the exception or return df without predictions
             raise ValueError(f"[{script_name}] Error in applying prediction: {e}")
 
     def load_model(self, model_path: str) -> GradientBoostingRegressor:
@@ -360,11 +363,14 @@ class MachineLearningIndicators(BaseIndicator):
         try:
             column_config_path = project_root / 'src' / 'Utilities' / 'column_config.json'
             required_columns = self.config.get('ML_REQUIRED_COLUMNS', [])
-            df = ColumnUtils.process_dataframe(
+            
+            # Create an instance of ColumnUtils
+            column_utils = ColumnUtils()
+            
+            # Use the instance to call process_dataframe
+            df = column_utils.process_dataframe(
                 df=df, 
-                config_path=column_config_path, 
-                required_columns=required_columns, 
-                logger=self.logger
+                # Add any additional arguments required by process_dataframe
             )
             self.logger.info(f"[{script_name}] DataFrame processed with ColumnUtils.")
         except (KeyError, FileNotFoundError, ValueError) as ve:
@@ -426,11 +432,20 @@ class MachineLearningIndicators(BaseIndicator):
             y_true = df[target_column].values
             y_pred = df["proprietary_prediction"].values
 
-            rmse = mean_squared_error(y_true, y_pred, squared=False)
+            # Calculate RMSE
+            try:
+                # Attempt to use the squared parameter if available
+                rmse = mean_squared_error(y_true, y_pred, squared=False)
+            except TypeError:
+                # Fallback for older versions of scikit-learn
+                mse = mean_squared_error(y_true, y_pred)
+                rmse = np.sqrt(mse)
+
             r2 = r2_score(y_true, y_pred)
             self.logger.info(f"[{script_name}] Model Evaluation Metrics - RMSE: {rmse}, R²: {r2}")
         except Exception as e:
             self.logger.error(f"[{script_name}] Failed to evaluate model: {e}", exc_info=True)
+            raise ValueError(f"[{script_name}] Error in applying indicators: {e}")
 
         self.logger.info(f"[{script_name}] Machine learning indicators applied successfully.")
         return df
@@ -442,7 +457,7 @@ if __name__ == "__main__":
     def main():
         print(f"[{script_name}] Entering main function for demonstration.")
         try:
-            db_handler = DBHandler(config=config_manager, logger=logger)
+            db_handler = DBHandler()
             data_store = DataStore(config=config_manager, logger=logger, use_csv=False)
 
             ml_indicators = MachineLearningIndicators(

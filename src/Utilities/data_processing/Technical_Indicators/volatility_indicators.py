@@ -102,12 +102,31 @@ required_columns = [
 # VolatilityIndicators Class (pandas-ta)
 # -------------------------------------------------------------------
 class VolatilityIndicators:
-    def __init__(self, logger: logging.Logger = None):
+    def __init__(self, logger: logging.Logger = None, data_store: DataStore = None):
         """
-        Initializes the VolatilityIndicators class with a logger.
+        Initializes the VolatilityIndicators class with a logger and data store.
         """
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.logger.info(f"[{script_name}] VolatilityIndicators (pandas-ta) initialized.")
+        self.data_store = data_store
+        self.column_utils = ColumnUtils()
+        self.config_manager = config_manager
+        self.logger.info(f"[{script_name}] VolatilityIndicators (pandas-ta) initialized.")
+
+    def downcast_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Downcasts numerical columns to reduce memory usage.
+
+        """
+        self.logger.info(f"[{script_name}] Downcasting DataFrame to optimize memory usage.")
+        float_cols = df.select_dtypes(include=['float64']).columns
+        int_cols = df.select_dtypes(include=['int64']).columns
+
+        df[float_cols] = df[float_cols].astype('float32')
+        df[int_cols] = df[int_cols].astype('int32')
+
+        self.logger.info(f"[{script_name}] Downcasting completed.")
+        return df
     
     def downcast_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -128,18 +147,50 @@ class VolatilityIndicators:
         Sets the 'date' or 'Date' column as the DatetimeIndex and sorts the DataFrame.
         """
         self.logger.info(f"[{script_name}] Setting 'Date' as DatetimeIndex.")
-        if 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'], errors='coerce')
-            df = df.set_index('date').sort_index()
-            df.rename_axis('Date', inplace=True)
-        elif 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-            df = df.set_index('Date').sort_index()
-        else:
-            self.logger.error("No 'date' or 'Date' column found in DataFrame.")
-            raise KeyError("Date column missing")
-        self.logger.info(f"[{script_name}] 'Date' set as DatetimeIndex.")
-        return df
+        
+        try:
+            if 'date' in df.columns:
+                # Convert to datetime with coercion and handle invalid dates
+                df['date'] = pd.to_datetime(df['date'], errors='coerce')
+                invalid_dates = df['date'].isna().sum()
+                if invalid_dates > 0:
+                    self.logger.warning(f"Found {invalid_dates} invalid dates in 'date' column")
+                
+                # Drop NaT values and duplicates
+                original_len = len(df)
+                df = df.dropna(subset=['date'])
+                df = df.drop_duplicates(subset=['date'])
+                dropped_rows = original_len - len(df)
+                if dropped_rows > 0:
+                    self.logger.warning(f"Dropped {dropped_rows} rows with invalid/duplicate dates")
+                
+                df = df.set_index('date').sort_index()
+                df.rename_axis('Date', inplace=True)
+                
+            elif 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+                invalid_dates = df['Date'].isna().sum()
+                if invalid_dates > 0:
+                    self.logger.warning(f"Found {invalid_dates} invalid dates in 'Date' column")
+                
+                original_len = len(df)
+                df = df.dropna(subset=['Date'])
+                df = df.drop_duplicates(subset=['Date'])
+                dropped_rows = original_len - len(df)
+                if dropped_rows > 0:
+                    self.logger.warning(f"Dropped {dropped_rows} rows with invalid/duplicate dates")
+                
+                df = df.set_index('Date').sort_index()
+            else:
+                self.logger.error("No 'date' or 'Date' column found in DataFrame.")
+                raise KeyError("Date column missing")
+            
+            self.logger.info(f"[{script_name}] 'Date' set as DatetimeIndex. {len(df)} records remain after cleaning.")
+            return df
+        
+        except Exception as e:
+            self.logger.error(f"Error setting datetime index: {e}", exc_info=True)
+            raise
 
     def add_bollinger_bands(self, df, window_size=20, std_multiplier=2, user_defined_window=None):
         """
@@ -287,19 +338,33 @@ class VolatilityIndicators:
         Applies all volatility indicators to the DataFrame.
         """
         self.logger.info(f"[{script_name}] Applying Volatility Indicators...")
+        
+        # Log initial shape
+        self.logger.info(f"Initial DataFrame shape: {df.shape}")
+        
         required_columns = ['close', 'high', 'low']
         if not all(col in df.columns for col in required_columns):
             self.logger.error(f"[{script_name}] DataFrame missing columns: {required_columns}")
-            return df  # or raise exception
+            return df
 
         try:
+            # Set datetime index with enhanced validation
             df = self.set_datetime_index(df)
+            
+            # Apply indicators
             df = self.add_bollinger_bands(df)
             df = self.add_standard_deviation(df)
             df = self.add_historical_volatility(df)
             df = self.add_chandelier_exit(df)
             df = self.add_keltner_channel(df)
             df = self.add_moving_average_envelope(df)
+            
+            # Reset the index to move 'Date' back to a column before saving
+            df = df.reset_index()
+            
+            # Log final shape
+            self.logger.info(f"Final DataFrame shape after applying indicators: {df.shape}")
+            
             self.logger.info(f"[{script_name}] Successfully applied all volatility indicators.")
         except Exception as e:
             self.logger.error(f"[{script_name}] Error applying Volatility Indicators: {e}", exc_info=True)
@@ -379,8 +444,8 @@ class VolatilityIndicators:
 def main():
     logger.info(f"[{script_name}] Entering main()")
     try:
-        # Initialize DatabaseHandler
-        db_handler = DatabaseHandler(config=config_manager, logger=logger)
+        # Initialize DBHandler
+        db_handler = DBHandler()
         logger.info(f"[{script_name}] DatabaseHandler initialized.")
 
         # Initialize DataStore
@@ -395,15 +460,12 @@ def main():
             logger.error(f"[{script_name}] No data found for symbol '{symbol}'. Exiting.")
             return
 
-        # Process the DataFrame using ColumnUtils to ensure all columns are lowercase and required columns are present
+        # Process the DataFrame using ColumnUtils
         try:
-            column_config_path = project_root / 'src' / 'Utilities' / 'column_config.json'
-            df = ColumnUtils.process_dataframe(
-                df,
-                config_path=column_config_path,
-                required_columns=required_columns,
-                logger=logger
-            )
+            # Initialize ColumnUtils instance
+            column_utils = ColumnUtils()
+            # Process the DataFrame
+            df = column_utils.process_dataframe(df, stage="pre")
             logger.info(f"[{script_name}] DataFrame processed with ColumnUtils.")
         except (KeyError, FileNotFoundError, ValueError) as ve:
             logger.error(f"[{script_name}] Data processing failed: {ve}")

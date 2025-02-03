@@ -33,12 +33,12 @@ class AllIndicatorsUnifier:
         self.data_store = DataStore(config=config_manager, logger=self.logger, use_csv=use_csv)
 
         # Initialize each indicators class.
-        self.volume_indicators = VolumeIndicators(logger=self.logger)
-        self.volatility_indicators = VolatilityIndicators(logger=self.logger)
+        self.volume_indicators = VolumeIndicators(logger=self.logger, data_store=self.data_store)
+        self.volatility_indicators = VolatilityIndicators(logger=self.logger, data_store=self.data_store)
         self.trend_indicators = TrendIndicators(data_store=self.data_store, logger=self.logger)
         self.momentum_indicators = MomentumIndicators(data_store=self.data_store, logger=self.logger)
         self.ml_indicators = MachineLearningIndicators(data_store=self.data_store, db_handler=None, config=config_manager, logger=self.logger)
-        self.custom_indicators = CustomIndicators(db_handler=None, config_manager=config_manager, logger=self.logger)
+        self.custom_indicators = CustomIndicators(data_store=self.data_store, config_manager=config_manager, logger=self.logger)
 
         self.logger.info("AllIndicatorsUnifier initialization complete.")
 

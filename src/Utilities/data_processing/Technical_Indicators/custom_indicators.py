@@ -227,47 +227,112 @@ class CustomIndicators(BaseIndicator):
     """
     Implements custom technical indicators with caching support.
     """
-    def __init__(self, db_handler: Optional[DBHandler], config_manager: ConfigManager,
-                 logger: Optional[logging.Logger] = None):
-        super().__init__(logger)
-        self.db_handler = db_handler
+    def __init__(self, data_store: DataStore, config_manager: ConfigManager, logger: logging.Logger):
+        """
+        Initialize CustomIndicators with data_store, config_manager, and logger.
+        """
+        self.data_store = data_store
         self.config_manager = config_manager
-        self.logger.info("[custom_indicators.py] CustomIndicators initialized.")
-
-    def apply_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Applies the custom indicators pipeline to the DataFrame.
-        """
-        self.logger.info("[custom_indicators.py] Applying custom indicators to DataFrame...")
+        self.logger = logger
+        
         try:
-            column_config_path = project_root / 'src' / 'Utilities' / 'column_config.json'
-            required_columns = ['close', 'high', 'low', 'macd_line', 'macd_signal',
-                                'macd_histogram', 'rsi', 'bollinger_width', 'date']
-            df = ColumnUtils.process_dataframe(
-                df,
-                config_path=column_config_path,
-                required_columns=required_columns,
-                logger=self.logger
-            )
-        except Exception as ve:
-            self.logger.error(f"[custom_indicators.py] Data processing failed: {ve}")
+            # Initialize ColumnUtils
+            self.column_utils = ColumnUtils()
+            self.logger.info(f"[{script_name}] CustomIndicators initialized for demonstration.")
+        except Exception as e:
+            self.logger.error(f"[{script_name}] Error initializing CustomIndicators: {e}", exc_info=True)
+            raise
+
+    def process_and_save_indicators(self, symbol: str, indicators: dict, window: int = 14, window_dev: float = 2.0) -> pd.DataFrame:
+        """
+        Process and save custom indicators for a given symbol.
+        """
+        self.logger.info(f"[{script_name}] Loading data for {symbol} from SQL.")
+        try:
+            # Load data using DataStore
+            df = self.data_store.load_data(symbol)
+            if df is None or df.empty:
+                self.logger.error(f"[{script_name}] No data found for symbol {symbol}")
+                return None
+
+            # Process DataFrame using ColumnUtils
+            try:
+                df = self.column_utils.process_dataframe(df, stage="pre")
+                self.logger.info(f"[{script_name}] DataFrame processed with ColumnUtils.")
+            except Exception as e:
+                self.logger.error(f"[{script_name}] Data processing failed: {e}")
+                return None
+
+            # Apply each indicator
+            for indicator_name, indicator_func in indicators.items():
+                try:
+                    df = self.add_custom_indicator(
+                        df, 
+                        indicator_name=indicator_name,
+                        indicator_function=indicator_func,
+                        window=window,
+                        window_dev=window_dev
+                    )
+                except Exception as e:
+                    self.logger.error(f"[{script_name}] Failed to add indicator {indicator_name}: {e}")
+
+            # Save processed data
+            self.data_store.save_data(df, symbol, overwrite=True)
+            self.logger.info(f"[{script_name}] Successfully saved processed data for {symbol}")
+
             return df
 
-        # Initialize and apply the indicator pipeline.
-        pipeline = IndicatorPipeline(logger=self.logger)
-        pipeline.add_indicator(CustomRSIIndicator(window=14, handle_nans='ffill', logger=self.logger))
-        pipeline.add_indicator(CustomBollingerBandsIndicator(window=20, window_dev=2, handle_nans='ffill', logger=self.logger))
-        df = pipeline.apply(df)
+        except Exception as e:
+            self.logger.error(f"[{script_name}] Error processing indicators: {e}", exc_info=True)
+            return None
 
-        required_indicator_cols = ['rsi', 'bollinger_upper', 'bollinger_lower', 'bollinger_mid']
-        missing_indicators = [col for col in required_indicator_cols if col not in df.columns]
-        if missing_indicators:
-            self.logger.error(f"[custom_indicators.py] Missing indicator columns after pipeline: {missing_indicators}")
-        else:
-            self.logger.info(f"[custom_indicators.py] All required indicator columns are present.")
+    def close(self):
+        """
+        Clean up resources.
+        """
+        try:
+            # DataStore doesn't need explicit closing as it handles connections internally
+            self.logger.info(f"[{script_name}] CustomIndicators cleanup completed.")
+        except Exception as e:
+            self.logger.error(f"[{script_name}] Error during cleanup: {e}", exc_info=True)
 
-        self.logger.info("[custom_indicators.py] Completed applying custom indicators pipeline.")
-        return df
+    def custom_rsi(self, df: pd.DataFrame, window: int = 14, **kwargs) -> pd.Series:
+        """
+        Calculate custom RSI.
+        """
+        try:
+            indicator = CustomRSIIndicator(window=window, logger=self.logger)
+            df = indicator.apply(df)
+            return df['rsi']
+        except Exception as e:
+            self.logger.error(f"[{script_name}] Error calculating custom RSI: {e}")
+            return pd.Series(index=df.index)
+
+    def custom_bollinger_bands(self, df: pd.DataFrame, window: int = 20, window_dev: int = 2, **kwargs) -> pd.DataFrame:
+        """
+        Calculate custom Bollinger Bands.
+        """
+        try:
+            indicator = CustomBollingerBandsIndicator(
+                window=window, 
+                window_dev=window_dev, 
+                logger=self.logger
+            )
+            return indicator.apply(df)
+        except Exception as e:
+            self.logger.error(f"[{script_name}] Error calculating Bollinger Bands: {e}")
+            return df
+
+    def custom_moving_average(self, df: pd.DataFrame, window: int = 10, **kwargs) -> pd.Series:
+        """
+        Calculate custom moving average.
+        """
+        self.logger.debug(f"[{script_name}] Calculating custom MA with window={window}")
+        try:
+            return df['close'].rolling(window=window, min_periods=1).mean().astype('float32')
+        except Exception as e:
+            self.logger.error(f"[{script_name}] Error calculating Moving Average: {e}")
+            return pd.Series(index=df.index)
 
     # --- Caching Utilities ---
     _cache: Dict[str, pd.Series] = {}
@@ -347,86 +412,35 @@ class CustomIndicators(BaseIndicator):
         self.logger.info(f"[{script_name}] Added '{indicator_name}' in {end_time - start_time:.2f}s")
         return df
 
-    def process_and_save_indicators(self, symbol: str, indicators: Dict[str, Callable], **kwargs: Any) -> pd.DataFrame:
-        self.logger.info(f"[{script_name}] Loading data for {symbol} from SQL.")
-        if not self.db_handler:
-            self.logger.error(f"[{script_name}] DataStore not initialized. Cannot load data.")
-            raise ValueError("DataStore is not initialized.")
-        df = self.db_handler.load_data(symbol)
-        if df is None or df.empty:
-            self.logger.error(f"[{script_name}] No data for {symbol}. Cannot compute indicators.")
-            raise ValueError(f"No data available for {symbol}.")
-
-        try:
-            column_config_path = project_root / 'src' / 'Utilities' / 'column_config.json'
-            required_columns = ['close', 'high', 'low', 'macd_line', 'macd_signal',
-                                'macd_histogram', 'rsi', 'bollinger_width', 'date']
-            df = ColumnUtils.process_dataframe(df, config_path=column_config_path,
-                                               required_columns=required_columns, logger=self.logger)
-        except Exception as ve:
-            self.logger.error(f"[{script_name}] Data processing failed: {ve}")
-            return df
-
-        self.logger.info(f"[{script_name}] Loaded {len(df)} records for {symbol}. Applying custom indicators...")
-        for name, func in indicators.items():
-            df = self.add_custom_indicator(df, name, func, **kwargs)
-        self.logger.debug(f"[{script_name}] 'date' dtype after custom indicators: {df['date'].dtype}")
-        self.logger.debug(f"[{script_name}] Sample 'date' values:\n{df['date'].head()}")
-        self.db_handler.save_data(df, symbol, overwrite=True)
-        self.logger.info(f"[{script_name}] Indicators processed/saved for {symbol}.")
-        return df
-
-    # --- Example Custom Indicator Functions ---
-    def custom_moving_average(self, df: pd.DataFrame, window: int = 10) -> pd.Series:
-        self.logger.debug(f"[{script_name}] Calculating custom MA with window={window}")
-        return df['close'].rolling(window=window, min_periods=1).mean()
-
-    def custom_bollinger_upper(self, df: pd.DataFrame, window: int = 20, window_dev: int = 2) -> pd.Series:
-        self.logger.debug(f"[{script_name}] Calculating custom Bollinger Upper with window={window}, dev={window_dev}")
-        rolling_mean = df['close'].rolling(window=window, min_periods=1).mean()
-        rolling_std = df['close'].rolling(window=window, min_periods=1).std()
-        return rolling_mean + (rolling_std * window_dev)
-
-    def custom_bollinger_lower(self, df: pd.DataFrame, window: int = 20, window_dev: int = 2) -> pd.Series:
-        self.logger.debug(f"[{script_name}] Calculating custom Bollinger Lower with window={window}, dev={window_dev}")
-        rolling_mean = df['close'].rolling(window=window, min_periods=1).mean()
-        rolling_std = df['close'].rolling(window=window, min_periods=1).std()
-        return rolling_mean - (rolling_std * window_dev)
-
-    def custom_rsi(self, df: pd.DataFrame, window: int = 14) -> pd.Series:
-        self.logger.debug(f"[{script_name}] Calculating custom RSI with window={window}")
-        try:
-            indicator = RSIIndicator(close=df['close'], window=window)
-            return indicator.rsi()
-        except Exception as e:
-            self.logger.error(f"[{script_name}] Error calculating custom RSI: {e}", exc_info=True)
-            return pd.Series([float('nan')] * len(df), index=df.index)
-
 # -------------------------------------------------------------------
 # Example Usage
 # -------------------------------------------------------------------
 def main():
     print(f"[{script_name}] Entering main() in {script_file}")
     try:
-        # Initialize DatabaseHandler (assumes it accepts ConfigManager and logger)
-        db_handler = DBHandler(config=config_manager, logger=logger)
-        custom_indicators = CustomIndicators(db_handler=db_handler, config_manager=config_manager, logger=logger)
+        # Initialize CustomIndicators
+        custom_indicators = CustomIndicators(data_store=data_store, config_manager=config_manager, logger=logger)
         logger.info(f"[{script_name}] CustomIndicators initialized for demonstration.")
 
-
-        # Define indicators to add (mapping indicator name to its function)
+        # Define indicators to add
         indicators = {
             'custom_rsi': custom_indicators.custom_rsi,
-            'custom_bollinger_upper': custom_indicators.custom_bollinger_upper,
-            'custom_bollinger_lower': custom_indicators.custom_bollinger_lower,
-            'custom_ma_memory': custom_indicators.custom_moving_average
+            'custom_bollinger_bands': custom_indicators.custom_bollinger_bands,
+            'ma_10': custom_indicators.custom_moving_average  # Renamed for clarity
         }
 
-        # Process and save indicators for a sample symbol.
+        # Process and save indicators for a sample symbol
         symbol = "AAPL"
-        df_with_indicators = custom_indicators.process_and_save_indicators(symbol, indicators, window=14, window_dev=2)
+        df_with_indicators = custom_indicators.process_and_save_indicators(
+            symbol=symbol,
+            indicators=indicators,
+            window=14,
+            window_dev=2
+        )
+
         if df_with_indicators is not None and not df_with_indicators.empty:
-            expected_cols = ['rsi', 'bollinger_upper', 'bollinger_lower', 'bollinger_mid', 'custom_ma_memory']
+            # Update expected columns to match new indicator names
+            expected_cols = ['rsi', 'bollinger_upper', 'bollinger_lower', 'bollinger_mid', 'ma_10']
             missing_cols = [c for c in expected_cols if c not in df_with_indicators.columns]
             if missing_cols:
                 logger.error(f"[{script_name}] Missing columns: {missing_cols}")
@@ -435,12 +449,8 @@ def main():
     except Exception as e:
         logger.error(f"[{script_name}] Error in main(): {e}", exc_info=True)
     finally:
-        if 'db_handler' in locals() and db_handler:
-            try:
-                db_handler.close()
-                logger.info(f"[{script_name}] Database connection closed.")
-            except Exception as ex:
-                logger.error(f"[{script_name}] Unexpected error closing DB: {ex}")
+        if 'custom_indicators' in locals() and custom_indicators:
+            custom_indicators.close()
 
 if __name__ == "__main__":
     main()
