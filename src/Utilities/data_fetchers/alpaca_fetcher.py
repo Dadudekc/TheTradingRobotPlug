@@ -1,83 +1,85 @@
-# -------------------------------------------------------------------
-# File: alpaca_fetcher.py
-# Location: src/Utilities/fetchers
-# Description: Fetches stock data from the Alpaca API.
-# -------------------------------------------------------------------
-
 import os
+import aiohttp
 import pandas as pd
-import alpaca_trade_api as tradeapi
+import logging
 from typing import Optional
-from Utilities.shared_utils import setup_logging  # Import the global logger setup
+from Utilities.shared_utils import setup_logging
+
 
 class AlpacaDataFetcher:
-    """Handles fetching stock data from the Alpaca API asynchronously."""
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        """
+        Initializes Alpaca Data Fetcher.
 
-    def __init__(self):
-        """Initializes Alpaca API client and logging."""
-        self.logger = setup_logging("alpaca_fetcher")  # Use global logging setup
-        self.logger.info("Initializing AlpacaDataFetcher...")
+        Args:
+            logger (Optional[logging.Logger]): Logger instance. Defaults to None.
+        """
+        self.logger = logger or setup_logging(script_name="AlpacaFetcher")
+        self.api_key = os.getenv("ALPACA_API_KEY")
+        self.api_secret = os.getenv("ALPACA_SECRET_KEY")
+        self.base_url = "https://paper-api.alpaca.markets"
 
-        # Load API Credentials
-        self.api_key = os.getenv('ALPACA_API_KEY')
-        self.secret_key = os.getenv('ALPACA_SECRET_KEY')
-        self.base_url = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
-
-        if not self.api_key or not self.secret_key:
+        if not self.api_key or not self.api_secret:
             self.logger.error("Alpaca API credentials are missing.")
-            self.alpaca_api = None
-            return
-
-        try:
-            self.alpaca_api = tradeapi.REST(
-                self.api_key, self.secret_key, self.base_url, api_version='v2'
-            )
-            self.logger.info("Alpaca API client initialized successfully.")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize Alpaca API client: {e}")
-            self.alpaca_api = None
 
     async def fetch_stock_data_async(
-        self, symbol: str, start_date: str, end_date: str, interval: str = "1Day"
+        self, symbol: str, start_date: str, end_date: str, session: Optional[aiohttp.ClientSession] = None
     ) -> pd.DataFrame:
         """
-        Fetches historical stock data asynchronously from Alpaca.
+        Fetches stock data from Alpaca asynchronously.
 
         Args:
             symbol (str): Stock symbol.
             start_date (str): Start date (YYYY-MM-DD).
             end_date (str): End date (YYYY-MM-DD).
-            interval (str, optional): Data interval. Defaults to "1Day".
+            session (Optional[aiohttp.ClientSession]): Optional shared session.
 
         Returns:
-            pd.DataFrame: Historical stock data.
+            pd.DataFrame: Stock data.
         """
-        if not self.alpaca_api:
-            self.logger.error("Alpaca API client is not initialized.")
-            return pd.DataFrame()
+        url = f"{self.base_url}/v2/stocks/{symbol}/bars?start={start_date}&end={end_date}&timeframe=1Day"
+        headers = {
+            "APCA-API-KEY-ID": self.api_key,
+            "APCA-API-SECRET-KEY": self.api_secret,
+        }
+
+        self.logger.debug(f"Fetching Alpaca data for {symbol} from URL: {url}")
+
+        # If session is not provided, create a new one
+        session_created = False
+        if session is None:
+            session = aiohttp.ClientSession()
+            session_created = True
 
         try:
-            bars = self.alpaca_api.get_bars(
-                symbol,
-                timeframe=interval,
-                start=pd.to_datetime(start_date).strftime('%Y-%m-%d'),
-                end=pd.to_datetime(end_date).strftime('%Y-%m-%d')
-            ).df
+            async with session.get(url, headers=headers, timeout=30) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    bars = data.get("bars", [])
 
-            if bars.empty:
-                self.logger.warning(f"No data returned from Alpaca for {symbol}.")
-                return pd.DataFrame()
+                    if not bars:
+                        self.logger.warning(f"No data returned from Alpaca for {symbol}.")
+                        return pd.DataFrame()
 
-            # Process data
-            bars.reset_index(drop=True, inplace=True)
-            bars.rename(columns={'timestamp': 'date', 'trade_count': 'volume'}, inplace=True)
-            bars['date'] = pd.to_datetime(bars['date']).dt.date
-            bars.set_index('date', inplace=True)
-            bars['symbol'] = symbol  # Add symbol column
+                    df = pd.DataFrame(bars)
+                    df["date"] = pd.to_datetime(df["t"]).dt.date  # Convert timestamp to date
+                    df.rename(
+                        columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"},
+                        inplace=True,
+                    )
+                    df.set_index("date", inplace=True)
 
-            self.logger.info(f"Fetched {len(bars)} records for {symbol} from Alpaca.")
-            return bars
+                    self.logger.info(f"Fetched {len(df)} records for {symbol} from Alpaca.")
+                    return df
+                else:
+                    error_text = await response.text()
+                    self.logger.error(f"Failed to fetch Alpaca data for {symbol}: {response.status} - {error_text}")
 
         except Exception as e:
-            self.logger.error(f"Error fetching Alpaca data for {symbol}: {e}")
-            return pd.DataFrame()
+            self.logger.error(f"Exception while fetching Alpaca data for {symbol}: {e}")
+
+        finally:
+            if session_created:
+                await session.close()
+
+        return pd.DataFrame()

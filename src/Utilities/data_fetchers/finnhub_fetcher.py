@@ -102,3 +102,70 @@ class FinnhubFetcher:
             self.logger.error(f"Exception while fetching Finnhub financial metrics for {symbol}: {e}")
 
         return pd.DataFrame()
+
+# File: finnhub_fetcher.py
+# Location: src/Utilities/fetchers
+# Description: Fetches data from Finnhub API.
+
+import os
+import aiohttp
+import pandas as pd
+from typing import Optional
+import logging
+
+class FinnhubFetcher:
+    def __init__(self, logger: logging.Logger):
+        self.logger = logger
+        self.api_key = os.getenv('FINNHUB_API_KEY')
+        if not self.api_key:
+            self.logger.error("FINNHUB_API_KEY is not set in environment variables.")
+
+    async def fetch_stock_data_async(self, symbol: str, session: Optional[aiohttp.ClientSession] = None) -> pd.DataFrame:
+        """
+        Fetches stock quote data from Finnhub asynchronously.
+
+        Args:
+            symbol (str): Stock symbol.
+            session (aiohttp.ClientSession, optional): Optional existing aiohttp session.
+
+        Returns:
+            pd.DataFrame: Stock quote data.
+        """
+        if not self.api_key:
+            self.logger.error("Finnhub API key is missing. Cannot fetch stock data.")
+            return pd.DataFrame()
+
+        url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={self.api_key}"
+        self.logger.debug(f"Fetching Finnhub stock data for {symbol} from URL: {url}")
+
+        async_session = session or aiohttp.ClientSession()
+        close_session = session is None  # Close session only if created here
+
+        try:
+            async with async_session.get(url, timeout=30) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    df = pd.DataFrame([{
+                        'date': pd.to_datetime(data.get('t', 0), unit='s'),
+                        'open': data.get('o'),
+                        'high': data.get('h'),
+                        'low': data.get('l'),
+                        'close': data.get('c'),
+                        'previous_close': data.get('pc'),
+                        'change': data.get('d'),
+                        'percent_change': data.get('dp'),
+                        'volume': data.get('v', 0)
+                    }]).set_index('date')
+
+                    self.logger.info(f"Fetched Finnhub stock data for {symbol}.")
+                    return df
+                else:
+                    error_text = await response.text()
+                    self.logger.error(f"Failed to fetch Finnhub stock data for {symbol}: {response.status} - {error_text}")
+        except Exception as e:
+            self.logger.error(f"Exception while fetching Finnhub stock data for {symbol}: {e}")
+        finally:
+            if close_session:
+                await async_session.close()
+
+        return pd.DataFrame()

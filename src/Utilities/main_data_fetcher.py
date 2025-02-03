@@ -91,9 +91,9 @@ class DataOrchestrator:
         self.logger = logger
         self.logger.info("Initializing DataOrchestrator...")
 
-        # Initialize fetchers
+        # Initialize fetchers with logger
         self.alpaca = AlpacaDataFetcher(self.logger)
-        self.alphavantage = AlphaVantageFetcher(self.logger)
+        self.alphavantage = AlphaVantageFetcher(self.logger)  # Pass logger explicitly
         self.finnhub = FinnhubFetcher(self.logger)
         self.yahoo_finance = YahooFinanceFetcher(self.logger)
         self.newsapi = NewsAPIFetcher(self.logger)
@@ -124,10 +124,11 @@ class DataOrchestrator:
 
         try:
             tasks = [
-                self.alpaca.fetch_stock_data_async(symbol, start_date, end_date, interval, async_session),
-                self.alphavantage.fetch_stock_data_async(symbol, start_date, end_date, interval, async_session),
-                self.finnhub.fetch_stock_data_async(symbol, async_session),
+                self.alpaca.fetch_stock_data_async(symbol, start_date, end_date, session=async_session),
+                self.alphavantage.fetch_stock_data_async(symbol, start_date, end_date, session=async_session),
+                self.finnhub.fetch_stock_data_async(symbol, session=async_session),
             ]
+
             fetched = await asyncio.gather(*tasks, return_exceptions=True)
 
             results["Alpaca"] = fetched[0] if not isinstance(fetched[0], Exception) else pd.DataFrame()
@@ -216,7 +217,7 @@ class DataOrchestrator:
             # E.g. data["Alpaca"], data["AlphaVantage"], etc.
 
             session.commit()
-            self.logger.info(f"✅ Successfully stored data for '{symbol}' in DB.")
+            self.logger.info(f"Successfully stored data for '{symbol}' in DB.")
 
         except SQLAlchemyError as e:
             session.rollback()
@@ -271,12 +272,30 @@ class DataOrchestrator:
             except Exception as e:
                 self.logger.error(f"Task encountered an error: {e}", exc_info=True)
                 return e
+            
+    # Inside the function where stock data cleaning happens
+
 
 # --------------------------------------------------------------------------------
 # Main Entry
 # --------------------------------------------------------------------------------
+import asyncio
+from src.Utilities.db.fix_stock_data import clean_stock_data  # Import here to avoid circular import
+
+def finalize_data():
+    """
+    Final step in the data pipeline: Cleans stock data after all fetching & storing.
+    """
+    try:
+        print("Running stock data cleanup...")
+        clean_stock_data()
+        print("Stock Data Cleanup Completed Successfully!")
+    except Exception as e:
+        print(f"Stock data cleanup failed: {e}")
+
 async def main():
     orchestrator = DataOrchestrator()
+    
     # Example usage
     symbols = ["AAPL", "TSLA"]
     start_date = "2023-01-01"
@@ -292,4 +311,5 @@ async def main():
         print(f"Fatal error during data fetching: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main())  # Run the main async function
+    finalize_data()  # Run cleanup after async operations
