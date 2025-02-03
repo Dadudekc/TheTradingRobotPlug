@@ -122,18 +122,52 @@ class ColumnUtils:
         Returns:
             pd.DataFrame: Processed DataFrame with clean column names.
         """
-        if stage == "pre":
-            self.config_path = self.DEFAULT_CONFIG_PATH_PRE
-        else:
-            self.config_path = self.DEFAULT_CONFIG_PATH_POST
-        
-        self.column_mappings = self._load_column_mapping()
-        df = self.standardize_columns(df)
-        df = self.flatten_columns(df)
-        df = self.validate_required_columns(df)
+        try:
+            if stage == "pre":
+                self.config_path = self.DEFAULT_CONFIG_PATH_PRE
+            else:
+                self.config_path = self.DEFAULT_CONFIG_PATH_POST
 
-        self.logger.info(f"DataFrame processing completed for {stage} stage.")
+            self.column_mappings = self._load_column_mapping()
+            df = self.standardize_columns(df)
+            df = self.flatten_columns(df)
+            
+            # Validate the DataFrame; raises error if missing required columns
+            self.validate_required_columns(df)
+
+            self.logger.info(f"DataFrame processing completed for {stage} stage.")
+            return df
+
+        except KeyError as e:
+            self.logger.error(f"Error in process_dataframe: {e}", exc_info=True)
+            raise
+
+        except Exception as e:
+            self.logger.error(f"Unexpected error in process_dataframe: {e}", exc_info=True)
+            raise
+
+    def set_datetime_index(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Sets the 'date' or 'Date' column as the DatetimeIndex and sorts the DataFrame.
+        """
+        self.logger.info("Setting 'Date' as DatetimeIndex.")
+
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+            df = df.drop_duplicates(subset=['date'])  # REMOVE DUPLICATES
+            df = df.set_index('date').sort_index()
+            df.rename_axis('Date', inplace=True)
+        elif 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            df = df.drop_duplicates(subset=['Date'])  # REMOVE DUPLICATES
+            df = df.set_index('Date').sort_index()
+        else:
+            self.logger.error("No 'date' or 'Date' column found in DataFrame.")
+            raise KeyError("Date column missing")
+
+        self.logger.info("'Date' set as DatetimeIndex.")
         return df
+
 
 # Example Usage
 column_utils = ColumnUtils()
