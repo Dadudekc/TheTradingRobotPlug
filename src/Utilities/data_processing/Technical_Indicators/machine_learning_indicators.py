@@ -8,7 +8,7 @@ import os
 import sys
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Any
 from abc import ABC, abstractmethod
 
 import pandas as pd
@@ -23,7 +23,7 @@ import numpy as np
 # Dynamically Identify Current File Name and Project Root
 # -------------------------------------------------------------------
 script_file = Path(__file__).resolve()
-script_name = script_file.name  # e.g., "machine_learning_indicators.py"
+script_name = script_file.name
 project_root = script_file.parents[4]  # Adjusted for the project structure
 
 # -------------------------------------------------------------------
@@ -60,7 +60,6 @@ sys.path.extend([
 # -------------------------------------------------------------------
 try:
     from Utilities.config_manager import ConfigManager, setup_logging
-    from Utilities.db.db_handler import DBHandler
     from Utilities.data.data_store import DataStore
     from Utilities.column_utils import ColumnUtils
     from Utilities.data_processing.base_indicators import BaseIndicator
@@ -69,6 +68,10 @@ try:
 except ImportError as e:
     print(f"[{script_name}] Error importing modules: {e}")
     sys.exit(1)
+    
+def get_db_handler():
+    from Utilities.db.db_handler import DBHandler
+    return DBHandler
 
 # -------------------------------------------------------------------
 # Logging Configuration
@@ -102,10 +105,10 @@ required_keys = [
     'CACHE_DIRECTORY',
     'ALPHAVANTAGE_API_KEY',
     'ALPHAVANTAGE_BASE_URL',
-    'ML_FEATURE_COLUMNS',        # Added for machine learning
-    'ML_TARGET_COLUMN',          # Added for machine learning
-    'ML_MODEL_PATH',             # Added for machine learning
-    'ML_MIN_ROWS'                # Added for machine learning
+    'ML_FEATURE_COLUMNS',
+    'ML_TARGET_COLUMN',
+    'ML_MODEL_PATH',
+    'ML_MIN_ROWS'
 ]
 
 try:
@@ -118,19 +121,35 @@ except KeyError as e:
 # -------------------------------------------------------------------
 # MachineLearningIndicators Class
 # -------------------------------------------------------------------
-class MachineLearningIndicators(BaseIndicator):
 
+class MachineLearningIndicators(BaseIndicator):
     """
     Class to handle machine learning indicators with caching and DataStore integration.
     """
     def __init__(
         self,
         data_store: Optional[DataStore] = None,
-        db_handler: Optional[DBHandler] = None,
+        db_handler: Optional[Any] = None,  # Use Any to avoid early type resolution
         config: Optional[ConfigManager] = None,
         logger: Optional[logging.Logger] = None
-
     ):
+        # Initialize the logger
+        self.logger = logger or logging.getLogger(self.__class__.__name__)
+
+        # Use the passed db_handler or lazily import it
+        if db_handler is None:
+            self.logger.info("Lazy loading DBHandler to prevent circular imports.")
+            DBHandler = get_db_handler()
+            self.db_handler = DBHandler()
+        else:
+            self.db_handler = db_handler
+
+        # Assign other attributes
+        self.data_store = data_store
+        self.config = config
+
+        self.logger.info("MachineLearningIndicators initialized successfully.")
+
         """
         Initialize the class and set up the DataStore for SQL data handling.
 
@@ -455,8 +474,19 @@ class MachineLearningIndicators(BaseIndicator):
 # -------------------------------------------------------------------
 if __name__ == "__main__":
     def main():
+        # 🛠 Lazy imports to prevent circular imports and NameError
+        from Utilities.db.db_handler import DBHandler
+        from Utilities.config_manager import ConfigManager
+        from Utilities.data.data_store import DataStore
+        from Utilities.data_processing.Technical_Indicators.machine_learning_indicators import MachineLearningIndicators
+        import pandas as pd
+
         print(f"[{script_name}] Entering main function for demonstration.")
         try:
+            # Initialize ConfigManager
+            config_manager = ConfigManager()
+
+            # Initialize DBHandler
             db_handler = DBHandler()
             data_store = DataStore(config=config_manager, logger=logger, use_csv=False)
 

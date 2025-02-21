@@ -5,12 +5,10 @@ import logging
 from typing import Optional
 from Utilities.shared_utils import setup_logging
 
-
 class AlpacaDataFetcher:
     def __init__(self, logger: Optional[logging.Logger] = None):
         """
         Initializes Alpaca Data Fetcher.
-
         Args:
             logger (Optional[logging.Logger]): Logger instance. Defaults to None.
         """
@@ -18,7 +16,6 @@ class AlpacaDataFetcher:
         self.api_key = os.getenv("ALPACA_API_KEY")
         self.api_secret = os.getenv("ALPACA_SECRET_KEY")
         self.base_url = "https://paper-api.alpaca.markets"
-
         if not self.api_key or not self.api_secret:
             self.logger.error("Alpaca API credentials are missing.")
 
@@ -27,13 +24,11 @@ class AlpacaDataFetcher:
     ) -> pd.DataFrame:
         """
         Fetches stock data from Alpaca asynchronously.
-
         Args:
             symbol (str): Stock symbol.
             start_date (str): Start date (YYYY-MM-DD).
             end_date (str): End date (YYYY-MM-DD).
             session (Optional[aiohttp.ClientSession]): Optional shared session.
-
         Returns:
             pd.DataFrame: Stock data.
         """
@@ -45,7 +40,6 @@ class AlpacaDataFetcher:
 
         self.logger.debug(f"Fetching Alpaca data for {symbol} from URL: {url}")
 
-        # If session is not provided, create a new one
         session_created = False
         if session is None:
             session = aiohttp.ClientSession()
@@ -53,14 +47,14 @@ class AlpacaDataFetcher:
 
         try:
             async with session.get(url, headers=headers, timeout=30) as response:
+                self.logger.debug(f"Received response with status {response.status} for {symbol}.")
                 if response.status == 200:
                     data = await response.json()
+                    self.logger.debug(f"Alpaca raw response type: {type(data)}")
                     bars = data.get("bars", [])
-
                     if not bars:
                         self.logger.warning(f"No data returned from Alpaca for {symbol}.")
                         return pd.DataFrame()
-
                     df = pd.DataFrame(bars)
                     df["date"] = pd.to_datetime(df["t"]).dt.date  # Convert timestamp to date
                     df.rename(
@@ -68,16 +62,13 @@ class AlpacaDataFetcher:
                         inplace=True,
                     )
                     df.set_index("date", inplace=True)
-
                     self.logger.info(f"Fetched {len(df)} records for {symbol} from Alpaca.")
                     return df
                 else:
                     error_text = await response.text()
                     self.logger.error(f"Failed to fetch Alpaca data for {symbol}: {response.status} - {error_text}")
-
         except Exception as e:
-            self.logger.error(f"Exception while fetching Alpaca data for {symbol}: {e}")
-
+            self.logger.error(f"Exception while fetching Alpaca data for {symbol}: {e}", exc_info=True)
         finally:
             if session_created:
                 await session.close()

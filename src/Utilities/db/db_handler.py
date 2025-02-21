@@ -6,7 +6,7 @@
 
 import os
 import logging
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, exc
 from sqlalchemy.orm import sessionmaker, scoped_session, declarative_base
 from dotenv import load_dotenv
 from pathlib import Path
@@ -26,24 +26,33 @@ Base = declarative_base()
 # DBHandler Class
 # -------------------------------------------------------------------
 class DBHandler:
-    """Handles database connections and basic queries using SQLAlchemy."""
+    """
+    Handles database connections and basic queries using SQLAlchemy.
+    Supports both PostgreSQL and SQLite with robust session management.
+    Also provides placeholder CRUD operations for ease of use.
+    """
 
-    def __init__(self, use_sqlite: bool = False, logger: logging.Logger = None):
+    def __init__(self, use_sqlite: bool = False, logger: logging.Logger = None,
+                 pool_size: int = 10, max_overflow: int = 20):
         """
         Initialize the DBHandler.
 
         Args:
             use_sqlite (bool): Whether to use SQLite instead of PostgreSQL.
             logger (logging.Logger): Logger instance for logging.
+            pool_size (int): Size of the connection pool (PostgreSQL only).
+            max_overflow (int): Maximum number of connections beyond the pool_size.
         """
         self.use_sqlite = use_sqlite
         self.logger = logger or self._setup_logger()
+        self.pool_size = pool_size
+        self.max_overflow = max_overflow
 
         self.engine = self._create_engine()
         self.Session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=self.engine))
         self.logger.info("DBHandler initialized successfully.")
 
-    def _setup_logger(self):
+    def _setup_logger(self) -> logging.Logger:
         """Sets up logging for the database handler."""
         logger = logging.getLogger('DBHandler')
         logger.setLevel(logging.INFO)
@@ -68,7 +77,12 @@ class DBHandler:
                 port = os.getenv('POSTGRES_PORT', '5432')
                 dbname = os.getenv('POSTGRES_DBNAME', 'trading_robot_plug')
                 DATABASE_URL = f'postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}'
-                engine = create_engine(DATABASE_URL, echo=False)
+                engine = create_engine(
+                    DATABASE_URL,
+                    echo=False,
+                    pool_size=self.pool_size,
+                    max_overflow=self.max_overflow
+                )
                 self.logger.info("PostgreSQL engine created successfully.")
             return engine
         except Exception as e:
@@ -97,6 +111,103 @@ class DBHandler:
         except Exception as e:
             self.logger.error(f"Error closing database connection: {e}")
 
+    # -------------------------------------------------------------------
+    # CRUD Operation Placeholders
+    # -------------------------------------------------------------------
+    def create_record(self, record: Base) -> None:
+        """
+        Inserts a new record into the database.
+
+        Args:
+            record (Base): An instance of a SQLAlchemy model.
+        """
+        session = self.get_session()
+        try:
+            session.add(record)
+            session.commit()
+            self.logger.info("Record created successfully.")
+        except exc.SQLAlchemyError as e:
+            session.rollback()
+            self.logger.error(f"Error creating record: {e}", exc_info=True)
+            raise
+        finally:
+            session.close()
+
+    def read_records(self, model: Base, filters: dict = None) -> list:
+        """
+        Reads records from the database based on optional filters.
+
+        Args:
+            model (Base): A SQLAlchemy model class.
+            filters (dict): A dictionary of filters to apply (optional).
+
+        Returns:
+            list: A list of model instances.
+        """
+        session = self.get_session()
+        try:
+            query = session.query(model)
+            if filters:
+                query = query.filter_by(**filters)
+            records = query.all()
+            self.logger.info(f"Read {len(records)} records from {model.__tablename__}.")
+            return records
+        except exc.SQLAlchemyError as e:
+            self.logger.error(f"Error reading records: {e}", exc_info=True)
+            raise
+        finally:
+            session.close()
+
+    def update_record(self, model: Base, filters: dict, update_data: dict) -> int:
+        """
+        Updates records in the database.
+
+        Args:
+            model (Base): A SQLAlchemy model class.
+            filters (dict): Filters to identify the records.
+            update_data (dict): Data to update.
+
+        Returns:
+            int: Number of rows updated.
+        """
+        session = self.get_session()
+        try:
+            query = session.query(model).filter_by(**filters)
+            rows_updated = query.update(update_data)
+            session.commit()
+            self.logger.info(f"Updated {rows_updated} records in {model.__tablename__}.")
+            return rows_updated
+        except exc.SQLAlchemyError as e:
+            session.rollback()
+            self.logger.error(f"Error updating records: {e}", exc_info=True)
+            raise
+        finally:
+            session.close()
+
+    def delete_record(self, model: Base, filters: dict) -> int:
+        """
+        Deletes records from the database.
+
+        Args:
+            model (Base): A SQLAlchemy model class.
+            filters (dict): Filters to identify the records to delete.
+
+        Returns:
+            int: Number of rows deleted.
+        """
+        session = self.get_session()
+        try:
+            rows_deleted = session.query(model).filter_by(**filters).delete()
+            session.commit()
+            self.logger.info(f"Deleted {rows_deleted} records from {model.__tablename__}.")
+            return rows_deleted
+        except exc.SQLAlchemyError as e:
+            session.rollback()
+            self.logger.error(f"Error deleting records: {e}", exc_info=True)
+            raise
+        finally:
+            session.close()
+
 # -------------------------------------------------------------------
 # Example Usage
 # -------------------------------------------------------------------
@@ -109,7 +220,7 @@ if __name__ == "__main__":
 
     try:
         with db.get_session() as session:
-            print("Database session ready for use.")
+            print("PostgreSQL session ready for use.")
     finally:
         db.close()
 
@@ -124,8 +235,8 @@ if __name__ == "__main__":
         sqlite_db.close()
 
 # -------------------------------------------------------------------
-# Future Improvements
-# - Implement connection pooling for optimized performance.
-# - Add CRUD operations for easy database interactions.
+# Future Improvements:
 # - Integrate Alembic for handling database migrations.
+# - Expand CRUD methods to support bulk operations.
+# - Implement more advanced connection pooling metrics and health checks.
 # -------------------------------------------------------------------

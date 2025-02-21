@@ -30,11 +30,11 @@ DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
 DB_PORT = os.getenv("POSTGRES_PORT", "5434")
 
 
-class DataFetchUtils:
+class MainDataFetcher:
     def __init__(self):
         """ Initializes fetchers and logging. """
-        self.logger = setup_logging(script_name="DataFetchUtils", log_level=logging.INFO)
-        self.logger.info("Initializing DataFetchUtils...")
+        self.logger = setup_logging(script_name="MainDataFetcher", log_level=logging.INFO)
+        self.logger.info("Initializing MainDataFetcher...")
 
         # Initialize fetchers
         self.yahoo_finance = YahooFinanceFetcher(self.logger)
@@ -180,7 +180,7 @@ class DataFetchUtils:
 # -------------------------------------------------------------------
 async def main():
     """ Fetch stock data & store it in PostgreSQL. """
-    fetcher = DataFetchUtils()
+    fetcher = MainDataFetcher()
     
     symbols = ["AAPL", "TSLA", "AMZN"]
     start_date = "2023-01-01"

@@ -17,7 +17,7 @@ import pandas as pd
 from aiohttp import ClientSession
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
 # --------------------------------------------------------------------------------
@@ -32,7 +32,7 @@ from Utilities.data_fetchers.newsapi_fetcher import NewsAPIFetcher
 # --------------------------------------------------------------------------------
 # Technical Indicators
 # --------------------------------------------------------------------------------
-from Utilities.indicator_aggregator import AllIndicatorsUnifier
+from Utilities.data_processing.Technical_Indicators.indicator_aggregator import AllIndicatorsUnifier
 
 # --------------------------------------------------------------------------------
 # Shared Utilities
@@ -93,7 +93,7 @@ class DataOrchestrator:
 
         # Initialize fetchers with logger
         self.alpaca = AlpacaDataFetcher(self.logger)
-        self.alphavantage = AlphaVantageFetcher(self.logger)  # Pass logger explicitly
+        self.alphavantage = AlphaVantageFetcher(self.logger)
         self.finnhub = FinnhubFetcher(self.logger)
         self.yahoo_finance = YahooFinanceFetcher(self.logger)
         self.newsapi = NewsAPIFetcher(self.logger)
@@ -135,7 +135,7 @@ class DataOrchestrator:
             results["AlphaVantage"] = fetched[1] if not isinstance(fetched[1], Exception) else pd.DataFrame()
             results["Finnhub"] = fetched[2] if not isinstance(fetched[2], Exception) else pd.DataFrame()
 
-            # Yahoo sync
+            # Yahoo data (synchronous)
             try:
                 yahoo_df = self.yahoo_finance.fetch_data_sync(symbol, start_date, end_date, interval)
                 results["YahooFinance"] = yahoo_df if isinstance(yahoo_df, pd.DataFrame) else pd.DataFrame()
@@ -143,7 +143,7 @@ class DataOrchestrator:
                 self.logger.error(f"Yahoo fetch failed for {symbol}: {e}")
                 results["YahooFinance"] = pd.DataFrame()
 
-            # NewsAPI async
+            # NewsAPI data (async)
             try:
                 news_data = await self.newsapi.fetch_news_data_async(symbol, page_size=5, session=async_session)
                 results["NewsAPI"] = news_data if isinstance(news_data, pd.DataFrame) else pd.DataFrame()
@@ -155,7 +155,7 @@ class DataOrchestrator:
             if close_session:
                 await async_session.close()
 
-        # Summaries
+        # Log summary of fetched data
         for source, df in results.items():
             if df.empty:
                 self.logger.warning(f"No data from {source} for {symbol}.")
@@ -185,12 +185,12 @@ class DataOrchestrator:
         self.logger.info(f"Storing data in DB for '{symbol}'...")
 
         try:
-            # Example: storing Yahoo data
+            # Example: storing YahooFinance data
             if "YahooFinance" in data and not data["YahooFinance"].empty:
                 yahoo_df = data["YahooFinance"].copy()
                 self.logger.debug(f"YahooFinance columns pre-indicators: {yahoo_df.columns.tolist()}")
 
-                # Apply indicators
+                # Apply technical indicators
                 yahoo_df = self.apply_indicators(yahoo_df)
                 self.logger.debug(f"YahooFinance columns post-indicators: {yahoo_df.columns.tolist()}")
 
@@ -213,8 +213,8 @@ class DataOrchestrator:
                 session.bulk_save_objects(yf_objects, update_existing=True)
                 self.logger.info(f"Inserted/Updated YahooFinance data for {symbol}.")
 
-            # Repeat for Alpaca, AlphaVantage, Finnhub, NewsAPI...
-            # E.g. data["Alpaca"], data["AlphaVantage"], etc.
+            # Repeat similar steps for other data sources: Alpaca, AlphaVantage, Finnhub, NewsAPI...
+            # For example: data["Alpaca"], data["AlphaVantage"], etc.
 
             session.commit()
             self.logger.info(f"Successfully stored data for '{symbol}' in DB.")
@@ -238,7 +238,7 @@ class DataOrchestrator:
     ) -> Dict[str, Dict[str, pd.DataFrame]]:
         """
         High-level function: For each symbol, fetch data from sources, store in DB.
-        Returns nested dict: { symbol: { "Alpaca": df, "AlphaVantage": df, ... } }
+        Returns a nested dict: { symbol: { "Alpaca": df, "AlphaVantage": df, ... } }
         """
         self.logger.info("Starting data fetch for multiple symbols.")
         semaphore = asyncio.Semaphore(max_concurrent_tasks)
@@ -251,7 +251,6 @@ class DataOrchestrator:
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
-
         final_data = {}
         for symbol, result in zip(symbols, results):
             if isinstance(result, Exception):
@@ -272,15 +271,11 @@ class DataOrchestrator:
             except Exception as e:
                 self.logger.error(f"Task encountered an error: {e}", exc_info=True)
                 return e
-            
-    # Inside the function where stock data cleaning happens
-
 
 # --------------------------------------------------------------------------------
-# Main Entry
+# Main Entry & Data Cleanup
 # --------------------------------------------------------------------------------
-import asyncio
-from src.Utilities.db.fix_stock_data import clean_stock_data  # Import here to avoid circular import
+from src.Utilities.db.fix_stock_data import clean_stock_data  # Import to avoid circular dependency
 
 def finalize_data():
     """
@@ -296,7 +291,7 @@ def finalize_data():
 async def main():
     orchestrator = DataOrchestrator()
     
-    # Example usage
+    # Example usage: define symbols and parameters
     symbols = ["AAPL", "TSLA"]
     start_date = "2023-01-01"
     end_date = "2023-12-31"
@@ -311,5 +306,5 @@ async def main():
         print(f"Fatal error during data fetching: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())  # Run the main async function
-    finalize_data()  # Run cleanup after async operations
+    asyncio.run(main())
+    finalize_data()

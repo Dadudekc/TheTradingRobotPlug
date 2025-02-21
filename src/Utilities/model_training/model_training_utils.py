@@ -1,6 +1,6 @@
 """
 File: model_training_utils.py
-Path: D:\TradingRobotPlug2\src\Utilities\model_training_utils.py
+Path: D:/TradingRobotPlug2/src/Utilities/model_training_utils.py
 
 Description:
     Handles saving, loading, and managing versions of machine learning models.

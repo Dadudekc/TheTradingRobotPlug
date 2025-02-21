@@ -1,6 +1,10 @@
-# File: main_indicators.py
 """
-Aggregates all indicators by referencing AllIndicatorsUnifier.
+File: indicator_aggregator.py
+Location: src/Utilities
+
+Description:
+    Aggregates all indicators by referencing AllIndicatorsUnifier.
+    Uses lazy import for AllIndicatorsUnifier to avoid circular import issues.
 """
 
 import logging
@@ -15,29 +19,35 @@ project_root = Path(__file__).resolve().parents[2]
 # Append the Utilities directory to sys.path if not already present.
 utilities_path = project_root / "src" / "Utilities"
 if str(utilities_path) not in sys.path:
-
     sys.path.append(str(utilities_path))
 
-# Now import required modules from Utilities.
+# Lazy Import Helper for AllIndicatorsUnifier to prevent circular import issues
+def get_all_indicators_unifier():
+    from Utilities.data_processing.Technical_Indicators.indicator_unifier import AllIndicatorsUnifier
+    return AllIndicatorsUnifier
+
+# Import required modules
 from Utilities.config_manager import ConfigManager, setup_logging
 from Utilities.db.db_handler import DBHandler
 from Utilities.data.data_store import DataStore
-from Utilities.data_processing.indicator_unifier import AllIndicatorsUnifier
-
 
 
 class MainIndicatorsAggregator:
     """
     Example usage of the AllIndicatorsUnifier class.
+    Uses lazy loading to avoid import issues.
     """
-    def __init__(self, config_manager: ConfigManager, logger: Optional[logging.Logger] = None, use_csv: bool = False):
 
+    def __init__(self, config_manager: ConfigManager, logger: Optional[logging.Logger] = None, use_csv: bool = False):
         self.logger = logger or logging.getLogger(self.__class__.__name__)
-        self.logger.info("Initializing ExampleIndicatorAggregator")
-        self.unifier = AllIndicatorsUnifier(config_manager, self.logger, use_csv=use_csv)
+        self.logger.info("Initializing MainIndicatorsAggregator")
+
+        # Lazy instantiation of AllIndicatorsUnifier
+        self.unifier = get_all_indicators_unifier()(config_manager, self.logger, use_csv=use_csv)
 
     def apply_all_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         return self.unifier.apply_all_indicators(df)
+
 
 def main():
     dotenv_path = project_root / ".env"
@@ -54,6 +64,7 @@ def main():
         "ML_MODEL_PATH",
         "ML_MIN_ROWS"
     ]
+
     try:
         config_manager = ConfigManager(env_file=dotenv_path, required_keys=required_keys)
     except KeyError as e:
@@ -78,8 +89,8 @@ def main():
     data_store = DataStore(config=config_manager, logger=logger, use_csv=False)
     symbol = "AAPL"
     df = data_store.load_data(symbol)
-    if df is None or df.empty:
 
+    if df is None or df.empty:
         logger.error(f"No data found for symbol '{symbol}'. Exiting.")
         return
 
@@ -88,6 +99,7 @@ def main():
     data_store.save_data(df_with_indicators, symbol=symbol, overwrite=True)
     logger.info(f"Data with all indicators saved for symbol {symbol}.")
     logger.info(df_with_indicators.tail(5).to_string())
+
 
 if __name__ == "__main__":
     main()

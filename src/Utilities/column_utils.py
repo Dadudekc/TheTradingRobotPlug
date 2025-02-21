@@ -183,3 +183,97 @@ df = pd.DataFrame({
 
 processed_df = column_utils.process_dataframe(df, stage="pre")
 print(processed_df)
+"""
+File: column_utils.py
+Location: src/Utilities/shared_utils/column_utils.py
+
+Description:
+    Provides utility functions for validating, standardizing, and processing DataFrames.
+    Ensures data integrity before applying technical indicators or performing analytics.
+
+Key Features:
+    - Standardizes column names.
+    - Validates required columns for processing.
+    - Handles missing or misnamed columns.
+    - Allows for pre-processing and transformation of data.
+"""
+
+import logging
+import pandas as pd
+from typing import List, Optional, Dict
+
+class ColumnUtils:
+    """
+    Utility class for handling column standardization, validation, and transformation.
+    """
+
+    REQUIRED_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
+
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        """
+        Initializes the ColumnUtils class.
+
+        Args:
+            logger (Optional[logging.Logger]): Logger instance for debugging and error tracking.
+        """
+        self.logger = logger or logging.getLogger(self.__class__.__name__)
+        self.logger.info("Initializing ColumnUtils...")
+
+    def standardize_column_names(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Standardizes column names by enforcing lowercase and replacing spaces.
+
+        Args:
+            df (pd.DataFrame): The input DataFrame.
+
+        Returns:
+            pd.DataFrame: The DataFrame with standardized column names.
+        """
+        self.logger.info("Standardizing column names...")
+        df.columns = df.columns.str.lower().str.replace(" ", "_")
+        return df
+
+    def validate_required_columns(self, df: pd.DataFrame) -> bool:
+        """
+        Validates that all required columns exist in the DataFrame.
+
+        Args:
+            df (pd.DataFrame): The input DataFrame.
+
+        Returns:
+            bool: True if all required columns exist, False otherwise.
+        """
+        missing_cols = [col for col in self.REQUIRED_COLUMNS if col not in df.columns]
+        if missing_cols:
+            self.logger.error(f"Missing required columns: {missing_cols}")
+            return False
+        self.logger.info("All required columns are present.")
+        return True
+
+    def process_dataframe(self, df: pd.DataFrame, stage: str = "pre") -> pd.DataFrame:
+        """
+        Processes the DataFrame by standardizing columns, validating data, and handling missing values.
+
+        Args:
+            df (pd.DataFrame): The input DataFrame.
+            stage (str): Processing stage, e.g., "pre" for pre-processing.
+
+        Returns:
+            pd.DataFrame: Processed DataFrame ready for analysis.
+        """
+        self.logger.info(f"Processing DataFrame at stage: {stage}")
+
+        # Standardize column names
+        df = self.standardize_column_names(df)
+
+        # Validate required columns
+        if not self.validate_required_columns(df):
+            raise ValueError("DataFrame is missing required columns. Cannot proceed.")
+
+        # Handling missing values (optional - adjust strategy as needed)
+        df.ffill(inplace=True)  # Forward fill missing values
+        df.bfill(inplace=True)  # Backward fill if necessary
+
+
+        self.logger.info(f"DataFrame processing completed for stage: {stage}")
+        return df

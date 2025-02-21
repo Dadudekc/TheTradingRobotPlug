@@ -3,8 +3,8 @@ import pandas as pd
 import numpy as np
 import backtrader as bt
 import os
-from Utilities.main_data_fetcher import fetch_historical_data
-from Utilities.indicator_aggregator import MACD
+from Utilities.datamain_data_fetcher import DataOrchestrator
+from Utilities.data_processing.Technical_Indicators.indicator_aggregator import MACD
 from evaluation.metrics import calculate_performance
 from evaluation.visualization import plot_backtest_results
 

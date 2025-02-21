@@ -5,7 +5,7 @@ Contains tests for:
 - Alpaca data fetching (single source),
 - yfinance-based fetches (fetch_stock_data_async),
 - Retries (fetch_with_retries),
-- Concurrency or large symbol handling (when not mixing multiple data sources).
+- Concurrency or large symbol handling.
 """
 
 import pytest
@@ -15,8 +15,13 @@ import aiohttp
 from aioresponses import aioresponses
 from unittest.mock import patch, MagicMock
 from datetime import date
-from Utilities.main_data_fetcher import DataFetchUtils
+from src.Utilities.data_fetchers.main_data_fetcher import MainDataFetcher  # Fixed import
 
+# The fixture data_fetch_utils_fixture should be defined in conftest.py.
+# For example:
+# @pytest.fixture
+# def data_fetch_utils_fixture():
+#     return MainDataFetcher()
 
 @pytest.mark.asyncio
 async def test_fetch_stock_data_async(data_fetch_utils_fixture):
@@ -39,7 +44,7 @@ async def test_fetch_stock_data_async(data_fetch_utils_fixture):
         'symbol': ['AAPL', 'AAPL']
     }, index=expected_index)
 
-    with patch('yfinance.download') as mock_yf_download:
+    with patch("yfinance.download") as mock_yf_download:
         mock_yf_download.return_value = pd.DataFrame({
             'Date': pd.to_datetime(['2023-01-03', '2023-01-04']),
             'Open': [130.0, 131.0],
@@ -48,12 +53,11 @@ async def test_fetch_stock_data_async(data_fetch_utils_fixture):
             'Close': [131.0, 132.0],
             'Volume': [1000000, 1500000],
             'Adj Close': [130.5, 131.5]
-        }).set_index('Date')
+        }).set_index("Date")
 
         result = await data_fetch_utils_fixture.fetch_stock_data_async(ticker, start_date, end_date, interval)
 
     pd.testing.assert_frame_equal(result, expected_data)
-
 
 @pytest.mark.asyncio
 async def test_fetch_alpaca_data_async_success(data_fetch_utils_fixture):
@@ -74,17 +78,21 @@ async def test_fetch_alpaca_data_async_success(data_fetch_utils_fixture):
         'symbol': ['AAPL', 'AAPL']
     })
 
+    # Patch the alpaca_api.get_bars method on the data_fetch_utils_fixture
     with patch.object(data_fetch_utils_fixture.alpaca_api, 'get_bars', return_value=MagicMock(df=mock_bars_df.copy())):
         result = await data_fetch_utils_fixture.fetch_alpaca_data_async(symbol, start_date, end_date, interval)
 
+    # Expected DataFrame: rename 'timestamp' to 'date' and 'trade_count' to 'volume',
+    # then set the index to the date (converted to a date object)
     expected_df = mock_bars_df.rename(columns={'timestamp': 'date', 'trade_count': 'volume'}).copy()
     expected_df['date'] = pd.to_datetime(expected_df['date']).dt.date
     expected_df.set_index('date', inplace=True)
+    # If your implementation drops the 'date' column after setting the index, mimic that here:
     expected_df.drop(columns=['date'], errors='ignore', inplace=True)
 
+    # Check that the columns match and the DataFrame equals the expected result.
     assert list(result.columns) == ['open', 'high', 'low', 'close', 'volume', 'symbol']
     pd.testing.assert_frame_equal(result, expected_df)
-
 
 @pytest.mark.asyncio
 async def test_fetch_alpaca_data_async_failure(data_fetch_utils_fixture):
@@ -102,7 +110,6 @@ async def test_fetch_alpaca_data_async_failure(data_fetch_utils_fixture):
     assert isinstance(result, pd.DataFrame)
     assert result.empty, "Expected an empty DataFrame on API failure."
 
-
 @pytest.mark.asyncio
 async def test_fetch_alpaca_data_async_invalid_date_range(data_fetch_utils_fixture):
     """
@@ -118,12 +125,12 @@ async def test_fetch_alpaca_data_async_invalid_date_range(data_fetch_utils_fixtu
 
     assert result.empty, "Expected an empty DataFrame for invalid date range."
 
-
 @pytest.mark.asyncio
 async def test_fetch_alpaca_no_key(data_fetch_utils_fixture):
     """
     Test fetch_alpaca_data_async when the Alpaca API key is missing or the client is None.
     """
+    # Simulate uninitialized Alpaca API by setting it to None
     data_fetch_utils_fixture.alpaca_api = None
     result = await data_fetch_utils_fixture.fetch_alpaca_data_async(
         symbol="AAPL",
@@ -132,7 +139,6 @@ async def test_fetch_alpaca_no_key(data_fetch_utils_fixture):
         interval="1Day"
     )
     assert result.empty, "Expected an empty DataFrame when Alpaca API key/client is uninitialized."
-
 
 @pytest.mark.asyncio
 async def test_fetch_with_retries_success(data_fetch_utils_fixture):
@@ -151,7 +157,6 @@ async def test_fetch_with_retries_success(data_fetch_utils_fixture):
 
     assert result == mock_response, "Expected successful response after retries"
 
-
 @pytest.mark.asyncio
 async def test_fetch_with_retries_failure(data_fetch_utils_fixture):
     """
@@ -167,7 +172,6 @@ async def test_fetch_with_retries_failure(data_fetch_utils_fixture):
             result = await data_fetch_utils_fixture.fetch_with_retries(url, headers, session, retries=retries)
 
     assert result is None, "Expected None after exceeding retry attempts"
-
 
 @pytest.mark.asyncio
 async def test_fetch_with_retries_mixed_failures(data_fetch_utils_fixture):
@@ -190,7 +194,6 @@ async def test_fetch_with_retries_mixed_failures(data_fetch_utils_fixture):
 
     assert result == mock_response, "Expected successful response on the third attempt."
 
-
 @pytest.mark.asyncio
 async def test_fetch_with_retries_empty_response(data_fetch_utils_fixture):
     """
@@ -202,7 +205,6 @@ async def test_fetch_with_retries_empty_response(data_fetch_utils_fixture):
             result = await data_fetch_utils_fixture.fetch_with_retries(url, {}, session, retries=3)
 
     assert result is None, "Expected None for empty or no response from the server."
-
 
 @pytest.mark.asyncio
 async def test_concurrency_fetch_many_symbols(data_fetch_utils_fixture):
@@ -237,7 +239,6 @@ async def test_concurrency_fetch_many_symbols(data_fetch_utils_fixture):
                 status=200
             )
 
-        # This calls fetch_data_for_multiple_symbols on a single data source or an equivalent concurrency approach
         result = await data_fetch_utils_fixture.fetch_data_for_multiple_symbols(
             symbols, data_sources, start_date, end_date, interval
         )

@@ -39,13 +39,16 @@ sys.path.extend([
 # -------------------------------------------------------------------
 try:
     from Utilities.config_manager import ConfigManager, setup_logging
-    from Utilities.db.db_handler import DBHandler
     from Utilities.data.data_store import DataStore
     from Utilities.column_utils import ColumnUtils
     print(f"[{script_name}] Successfully imported config_manager, db_handler, data_store, column_utils.")
 except ImportError as e:
     print(f"[{script_name}] Error importing modules: {e}")
     sys.exit(1)
+    
+def get_db_handler():
+    from Utilities.db.db_handler import DBHandler
+    return DBHandler
 
 # -------------------------------------------------------------------
 # Logger Configuration

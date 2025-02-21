@@ -28,7 +28,7 @@ from Utilities.data_fetchers.newsapi_fetcher import NewsAPIFetcher
 
 # Import indicators aggregator
 def get_indicator_aggregator(logger):
-    from Utilities.indicator_aggregator import AllIndicatorsUnifier
+    from Utilities.data_processing.Technical_Indicators.indicator_aggregator import AllIndicatorsUnifier
     return AllIndicatorsUnifier(
         config_manager=None,  # Provide ConfigManager instance if required
         logger=logger,
@@ -70,16 +70,16 @@ SessionLocal = Session(bind=engine)
 Base.metadata.create_all(bind=engine)
 
 
-class DataFetchUtils:
+class MainDataFetcher:
     def __init__(self):
         """Initializes fetchers, indicators aggregator, and logging."""
         self.logger = setup_logging(
-            script_name="DataFetchUtils",
+            script_name="MainDataFetcher",
             log_file=os.path.join("logs", "data_fetch_utils.log"),
             level=logging.INFO
         )
 
-        self.logger.info("Initializing DataFetchUtils...")
+        self.logger.info("Initializing MainDataFetcher...")
 
         # Initialize fetchers
         self.yahoo_finance = YahooFinanceFetcher(self.logger)
@@ -357,7 +357,7 @@ class DataFetchUtils:
 # -------------------------------------------------------------------
 async def main():
     """Fetch stock data, apply indicators, and store in PostgreSQL."""
-    data_fetcher = DataFetchUtils()
+    data_fetcher = MainDataFetcher()
 
     # Define symbols and parameters
     symbols = ["AAPL", "TSLA", "AMZN"]

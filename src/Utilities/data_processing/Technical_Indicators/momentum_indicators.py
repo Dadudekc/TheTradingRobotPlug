@@ -66,7 +66,6 @@ sys.path.extend([
 # -------------------------------------------------------------------
 try:
     from Utilities.config_manager import ConfigManager, setup_logging
-    from Utilities.db.db_handler import DBHandler
     from Utilities.data.data_store import DataStore
     from Utilities.column_utils import ColumnUtils
     print(f"[{script_name}] Successfully imported config_manager, db_handler, data_store, column_utils.")
@@ -75,6 +74,9 @@ except ImportError as e:
     print(f"[{script_name}] Error importing modules: {e}")
     sys.exit(1)
 
+def get_db_handler():
+    from Utilities.db.db_handler import DBHandler
+    return DBHandler
 # -------------------------------------------------------------------
 # Logging Configuration
 # -------------------------------------------------------------------
@@ -227,7 +229,6 @@ class ROCIndicatorClass(Indicator):
             df['roc'] = 0.0
 
         return df
-
 class TRIXIndicatorClass(Indicator):
     def __init__(self, window: int = 15, signal_window: int = 9, logger: Optional[logging.Logger] = None):
         self.window = window
@@ -242,11 +243,13 @@ class TRIXIndicatorClass(Indicator):
             raise ValueError("Missing 'close' column for TRIX")
 
         try:
+            # Calculate TRIX
             trix_ind = TRIXIndicator(close=df['close'], window=self.window, fillna=False)
             df['trix'] = trix_ind.trix()
-            
-            # Compute TRIX Signal Line
-            df['trix_signal'] = trix_ind.trix_signal()
+
+            # ✅ FIX: Manually compute TRIX Signal Line using EMA
+            df['trix_signal'] = df['trix'].ewm(span=self.signal_window, adjust=False).mean()
+
             self.logger.info(f"[{script_name}] TRIX applied successfully.")
         except Exception as e:
             self.logger.error(f"[{script_name}] Failed to calculate TRIX: {e}", exc_info=True)
@@ -286,23 +289,32 @@ class IndicatorPipeline:
 # -------------------------------------------------------------------
 # MomentumIndicators Class Definition
 # -------------------------------------------------------------------
+
 class MomentumIndicators:
     """
     Encapsulates all momentum indicators and provides a composable interface to apply them.
     """
 
     def __init__(self, logger: logging.Logger, data_store: DataStore, pipeline: Optional[IndicatorPipeline] = None):
+        """
+        Initializes the MomentumIndicators class.
+        
+        :param logger: Logger instance for logging operations.
+        :param data_store: DataStore instance to handle data operations.
+        :param pipeline: Optional IndicatorPipeline instance. If None, a new pipeline is created.
+        """
         self.logger = logger
         self.pipeline = pipeline or IndicatorPipeline(logger=self.logger)
         self.data_store = data_store
-        self.logger.info(f"[{script_name}] MomentumIndicators instance created")
 
-        # Initialize and add indicators to the pipeline
+        self.logger.info("[momentum_indicators.py] MomentumIndicators instance created.")
         self.initialize_indicators()
 
     def initialize_indicators(self):
-        """Initialize and add all desired momentum indicators to the pipeline."""
-        self.logger.info(f"[{script_name}] Initializing momentum indicators.")
+        """
+        Initializes and adds all momentum indicators to the pipeline.
+        """
+        self.logger.info("[momentum_indicators.py] Initializing momentum indicators.")
 
         try:
             self.add_indicator(RSIIndicatorClass(window=14, logger=self.logger))
@@ -310,61 +322,63 @@ class MomentumIndicators:
             self.add_indicator(WilliamsRIndicatorClass(lbp=14, logger=self.logger))
             self.add_indicator(ROCIndicatorClass(window=12, logger=self.logger))
             self.add_indicator(TRIXIndicatorClass(window=15, signal_window=9, logger=self.logger))
-            self.logger.info(f"[{script_name}] All momentum indicators added to the pipeline.")
+            self.logger.info(f"[momentum_indicators.py] All {len(self.pipeline.indicators)} momentum indicators added.")
         except Exception as e:
-            self.logger.error(f"[{script_name}] Error initializing indicators: {e}", exc_info=True)
+            self.logger.error(f"[momentum_indicators.py] Error initializing indicators: {e}", exc_info=True)
 
-    def add_indicator(self, indicator: Indicator):
+    def add_indicator(self, indicator):
+        """
+        Adds an indicator to the pipeline.
+        
+        :param indicator: Indicator instance to add.
+        """
         self.pipeline.add_indicator(indicator)
+        self.logger.info(f"[momentum_indicators.py] Added {indicator.__class__.__name__} to the pipeline.")
 
     def remove_indicator(self, indicator_cls):
+        """
+        Removes an indicator from the pipeline.
+        
+        :param indicator_cls: The class of the indicator to remove.
+        """
         self.pipeline.remove_indicator(indicator_cls)
+        self.logger.info(f"[momentum_indicators.py] Removed {indicator_cls.__name__} from the pipeline.")
 
     def apply_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        self.logger.info(f"[{script_name}] Starting to apply momentum indicators pipeline")
+        self.logger.info("[momentum_indicators.py] Applying momentum indicators.")
 
-        # 1) Process the DataFrame using ColumnUtils
-        try:
-            column_config_path = project_root / 'src' / 'Utilities' / 'column_config.json'
-            # Define required columns for momentum indicators
-            required_columns = [
-                'close',
-                'high',
-                'low',
-                'macd_line',
-                'macd_signal',
-                'macd_histogram',
-                'rsi',
-                'bollinger_width',
-                'date'
-            ]
-            df = ColumnUtils.process_dataframe(
-                df,
-                config_path=column_config_path,
-                required_columns=required_columns,
-                logger=self.logger
-            )
-            self.logger.info("DataFrame processed with ColumnUtils.")
-        except (KeyError, FileNotFoundError, ValueError) as ve:
-            self.logger.error(f"[{script_name}] Data processing failed: {ve}")
+        if not self.pipeline.indicators:
+            self.logger.error("[momentum_indicators.py] No indicators in the pipeline. Ensure indicators are initialized.")
             return df
 
-        # 2) Apply pipeline of indicators
-        df = self.pipeline.apply(df)
+        try:
+            # Validate required columns
+            required_cols = {"date", "open", "high", "low", "close", "volume"}
+            missing_cols = required_cols - set(df.columns)
+            if missing_cols:
+                self.logger.warning(f"[momentum_indicators.py] Missing required columns: {missing_cols}. Some indicators may not work.")
 
-        # 3) Ensure MACD is calculated correctly (if not already handled by ColumnUtils)
-        if 'macd_line' not in df.columns:
-            self.logger.warning(f"[{script_name}] 'macd_line' missing after applying indicators. Attempting manual calculation.")
-            df['macd_line'] = df['close'].ewm(span=12, adjust=False).mean() - df['close'].ewm(span=26, adjust=False).mean()
+            column_utils = ColumnUtils()
+            df = column_utils.process_dataframe(df, stage="pre")
 
-            if 'macd_line' not in df.columns:
-                self.logger.error(f"[{script_name}] Failed to calculate 'macd_line' manually.")
+            df = self.pipeline.apply(df)
 
-        # Similarly, ensure other required columns are present or calculate manually if needed
-        # (This step can be expanded based on your requirements)
+            df = column_utils.process_dataframe(df, stage="post")
 
-        self.logger.info(f"[{script_name}] Completed applying momentum indicators pipeline")
+            # ✅ FIX: Ensure TRIX columns exist before saving
+            expected_cols = ["stochastic", "stochastic_signal", "rsi", "williams_r", "roc", "trix", "trix_signal"]
+            for col in expected_cols:
+                if col not in df.columns:
+                    self.logger.warning(f"[momentum_indicators.py] Column '{col}' is missing. Initializing with default values.")
+                    df[col] = 0.0
+
+            self.logger.info("[momentum_indicators.py] Successfully applied all momentum indicators.")
+        except Exception as e:
+            self.logger.error(f"[momentum_indicators.py] Error while applying indicators: {e}", exc_info=True)
+
         return df
+
+
 
     def load_data_from_sql(self, symbol: str) -> Optional[pd.DataFrame]:
         """
@@ -503,65 +517,73 @@ class MomentumIndicators:
 # -------------------------------------------------------------------
 # Example Usage
 # -------------------------------------------------------------------
-def main():
-    logger.info("Entering main() in momentum_indicators.py")
-    try:
-        # Initialize DatabaseHandler
-        db_handler = DBHandler(config=config_manager, logger=logger)
-        logger.info("DatabaseHandler initialized.")
 
-
-        # Initialize DataStore
-        data_store = DataStore(config=config_manager, logger=logger, use_csv=False)
-        logger.info("DataStore initialized.")
-
-        # Load data for a sample symbol
-        symbol = "AAPL"
-        df = data_store.load_data(symbol=symbol)
-
-        if df is None or df.empty:
-            logger.error(f"No data found for symbol '{symbol}'. Exiting.")
-            return
-
-        # Initialize MomentumIndicators and apply indicators
-        momentum_indicators = MomentumIndicators(logger=logger, data_store=data_store)
-
-        # Apply indicators
-        df = momentum_indicators.apply_indicators(df)
-
-        # Display the updated data
-        expected_cols = [
-            "stochastic",
-            "stochastic_signal",
-            "rsi",
-            "williams_r",
-            "roc",
-            "trix",
-            "trix_signal"
-        ]
-        missing_cols = [col for col in expected_cols if col not in df.columns]
-        if missing_cols:
-            logger.error(f"Missing momentum indicator columns: {missing_cols}")
-        else:
-            logger.info("All momentum indicator columns are present.")
-            print(f"\n[momentum_indicators.py] Sample Momentum Indicators:\n", df[expected_cols].tail())
-
-        # Save the modified data back to the SQL database
-        data_store.save_data(df, symbol=symbol, overwrite=True)
-        logger.info(f"Data saved with new momentum indicators for symbol '{symbol}'.")
-
-    except Exception as e:
-        logger.error(f"Unexpected error in main(): {e}", exc_info=True)
-    finally:
-        if 'db_handler' in locals() and db_handler:
-            try:
-                db_handler.close()
-                logger.info("DatabaseHandler closed.")
-            except Exception as ex:
-                logger.error(f"Error closing DatabaseHandler: {ex}", exc_info=True)
-
-# -------------------------------------------------------------------
-# Entry Point
-# -------------------------------------------------------------------
 if __name__ == "__main__":
+    def main():
+        # Lazy imports to prevent circular dependencies
+        from Utilities.db.db_handler import DBHandler
+        from Utilities.config_manager import ConfigManager
+        from Utilities.data.data_store import DataStore
+        from Utilities.data_processing.Technical_Indicators.momentum_indicators import MomentumIndicators
+        import pandas as pd
+
+        logger.info("Entering main() in momentum_indicators.py")
+        try:
+            # Initialize ConfigManager
+            config_manager = ConfigManager()
+
+            # Initialize DBHandler (REMOVE 'config' ARGUMENT)
+            db_handler = DBHandler(logger=logger)
+            logger.info("DatabaseHandler initialized.")
+
+            # Initialize DataStore
+            data_store = DataStore(config=config_manager, logger=logger, use_csv=False)
+            logger.info("DataStore initialized.")
+
+            # Load data for a sample symbol
+            symbol = "AAPL"
+            df = data_store.load_data(symbol=symbol)
+
+            if df is None or df.empty:
+                logger.error(f"No data found for symbol '{symbol}'. Exiting.")
+                return
+
+            # Initialize MomentumIndicators and apply indicators
+            momentum_indicators = MomentumIndicators(logger=logger, data_store=data_store)
+
+            # Apply indicators
+            df = momentum_indicators.apply_indicators(df)
+
+            # Display the updated data
+            expected_cols = [
+                "stochastic",
+                "stochastic_signal",
+                "rsi",
+                "williams_r",
+                "roc",
+                "trix",
+                "trix_signal"
+            ]
+            missing_cols = [col for col in expected_cols if col not in df.columns]
+            if missing_cols:
+                logger.error(f"Missing momentum indicator columns: {missing_cols}")
+            else:
+                logger.info("All momentum indicator columns are present.")
+                print(f"\n[momentum_indicators.py] Sample Momentum Indicators:\n", df[expected_cols].tail())
+
+            # Save the modified data back to the SQL database
+            data_store.save_data(df, symbol=symbol, overwrite=True)
+            logger.info(f"Data saved with new momentum indicators for symbol '{symbol}'.")
+
+        except Exception as e:
+            logger.error(f"Unexpected error in main(): {e}", exc_info=True)
+        finally:
+            if 'db_handler' in locals() and db_handler:
+                try:
+                    db_handler.close()
+                    logger.info("DatabaseHandler closed.")
+                except Exception as ex:
+                    logger.error(f"Error closing DatabaseHandler: {ex}", exc_info=True)
+
     main()
+

@@ -38,13 +38,15 @@ if str(utilities_dir.resolve()) not in sys.path:
 try:
     from Utilities.config_manager import ConfigManager, setup_logging
     from Utilities.data.data_store import DataStore
-    from Utilities.db.db_handler import DBHandler
     from Utilities.column_utils import ColumnUtils
     print("[volume_indicators.py] Imported config_manager, db_handler, data_store, column_utils successfully.")
 except ImportError as e:
     print(f"[volume_indicators.py] Error importing utility modules: {e}")
     sys.exit(1)
-
+# Lazy Import for DBHandler (to avoid circular import)
+def get_db_handler():
+    from Utilities.db.db_handler import DBHandler
+    return DBHandler
 # -------------------------------------------------------------------
 # Configuration and Logger Setup
 # -------------------------------------------------------------------
@@ -409,9 +411,22 @@ class VolumeIndicators(BaseIndicator):
 def main():
     logger.info("Entering main() in volume_indicators.py")
     try:
-        # Initialize DatabaseHandler and DataStore
+        # 🛠 Lazy Import to prevent NameError and circular deps
+        from Utilities.db.db_handler import DBHandler
+        from Utilities.config_manager import ConfigManager
+        from Utilities.data.data_store import DataStore
+        from Utilities.column_utils import ColumnUtils
+        from Utilities.data_processing.Technical_Indicators.volume_indicators import VolumeIndicators
+        import pandas as pd
+
+        # Initialize ConfigManager
+        config_manager = ConfigManager()
+
+        # Initialize DBHandler
         db_handler = DBHandler(logger=logger)
         logger.info("DatabaseHandler initialized.")
+
+        # Initialize DataStore
         data_store = DataStore(config=config_manager, logger=logger, use_csv=False)
         logger.info("DataStore initialized.")
 
@@ -423,21 +438,21 @@ def main():
             logger.error(f"No data found for symbol '{symbol}'. Exiting.")
             return
 
-        # Instantiate ColumnUtils and process the DataFrame
+        # Process the DataFrame with ColumnUtils
         column_utils = ColumnUtils()
         df = column_utils.process_dataframe(df, stage="pre")
         logger.info("DataFrame processed with ColumnUtils.")
 
-        # **New Type Check**: Ensure df is a valid DataFrame
+        # Validate type
         if not isinstance(df, pd.DataFrame):
             logger.error(f"ColumnUtils.process_dataframe returned invalid type: {type(df)}. Exiting.")
             return
 
-        # Initialize VolumeIndicators and apply them
+        # Initialize VolumeIndicators
         volume_indicators = VolumeIndicators(logger=logger, data_store=data_store)
         df = volume_indicators.apply_indicators(df)
 
-        # Validate expected indicator columns
+        # Validate expected columns
         expected_cols = ["mfi", "obv", "vwap", "adl", "cmf", "volume_oscillator"]
         missing_cols = [col for col in expected_cols if col not in df.columns]
         if missing_cols:
@@ -446,7 +461,7 @@ def main():
             logger.info("All volume indicator columns are present.")
             print(f"\n[volume_indicators.py] Sample Volume Indicators:\n", df[expected_cols].tail())
 
-        # Save the modified data back to the SQL database
+        # Save modified data to the SQL database
         volume_indicators.save_data(df, symbol=symbol, overwrite=True)
 
     except Exception as e:

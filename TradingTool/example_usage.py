@@ -1,13 +1,13 @@
 # -------------------------------------------------------------------
 # File: example_usage.py
 # Location: TradingTool/
-# Description: Example script to demonstrate usage of DataFetchUtils and trading strategies.
+# Description: Example script to demonstrate usage of MainDataFetcher and trading strategies.
 # -------------------------------------------------------------------
 
 import asyncio
 import logging
 from aiohttp import ClientSession
-from Utilities.main_data_fetcher import DataFetchUtils
+from Utilities.data_fetchers.main_data_fetcher import DataOrchestrator
 from Utilities.strategies.moving_averages import MovingAverages
 from Utilities.strategies.trading_strategies import TradingStrategies
 from Utilities.strategies.backtester import Backtester
@@ -16,8 +16,8 @@ import matplotlib.pyplot as plt
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Create an instance of DataFetchUtils
-data_fetcher = DataFetchUtils()
+# Create an instance of MainDataFetcher
+data_fetcher = MainDataFetcher()
 
 # Initialize strategies
 logger = logging.getLogger("TradingTool")

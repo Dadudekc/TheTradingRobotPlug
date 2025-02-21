@@ -19,8 +19,7 @@ data_processing_dir = project_root / "src" / "Data_Processing"
 sys.path.append(str(data_processing_dir))
 
 # Import the VolatilityIndicators class
-from src.Data_Processing.Technical_Indicators.volatility_indicators import VolatilityIndicators
-
+from src.Utilities.data_processing.Technical_Indicators.volatility_indicators import VolatilityIndicators
 class TestVolatilityIndicators(unittest.TestCase):
     def setUp(self):
         """

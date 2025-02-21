@@ -8,8 +8,7 @@ from pathlib import Path
 import pytest
 import os
 from unittest.mock import patch, MagicMock
-from Utilities.main_data_fetcher import initialize_alpaca, get_project_root
-from Utilities.main_data_fetcher import DataFetchUtils
+from Utilities.data_fetchers.main_data_fetcher import MainDataFetcher
 
 def test_initialize_alpaca_invalid_config(monkeypatch):
     """
@@ -64,7 +63,7 @@ async def test_logging_setup(data_fetch_utils_fixture):
 ])
 def test_data_fetch_utils_init_missing_keys(monkeypatch, missing_key, expect_error, expected_warning):
     """
-    Test DataFetchUtils initialization with or without missing environment keys.
+    Test MainDataFetcher initialization with or without missing environment keys.
     """
     env_vars = {"NEWSAPI_API_KEY": "test_newsapi_key", "FINNHUB_API_KEY": "test_finnhub_key"}
     if missing_key:
@@ -74,8 +73,8 @@ def test_data_fetch_utils_init_missing_keys(monkeypatch, missing_key, expect_err
         mock_logger = MagicMock()
         if expect_error:
             with pytest.raises(EnvironmentError, match="Missing NewsAPI key."):
-                DataFetchUtils(logger=mock_logger)
+                MainDataFetcher(logger=mock_logger)
             mock_logger.error.assert_called_with("NEWSAPI_API_KEY is not set in environment variables.")
         else:
-            DataFetchUtils(logger=mock_logger)
+            MainDataFetcher(logger=mock_logger)
             mock_logger.warning.assert_any_call(expected_warning)

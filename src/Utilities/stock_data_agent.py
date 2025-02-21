@@ -4,17 +4,24 @@
 
 import asyncio
 import logging
-from data_fetch_utils import DataFetchUtils
 import aiohttp
+import pandas as pd
+from typing import Dict, Any
 
 class StockDataAgent:
     """
     Agent interface for fetching stock data from multiple sources.
     """
 
-    def __init__(self):
+    def __init__(self, fetcher) -> None:
+        """
+        Initialize the StockDataAgent with a provided fetcher instance.
+        
+        Args:
+            fetcher: An instance that provides sub-components like finnhub, alpaca, alphavantage, newsapi, and async_fetcher.
+        """
         self.logger = logging.getLogger("StockDataAgent")
-        self.fetcher = DataFetchUtils()
+        self.fetcher = fetcher
 
     async def get_real_time_quote(self, symbol: str) -> dict:
         self.logger.info(f"Fetching real-time quote for {symbol}...")
@@ -53,7 +60,9 @@ class StockDataAgent:
     async def get_combined_data(self, symbol: str, start_date: str, end_date: str, interval: str = "1d") -> Dict[str, Any]:
         self.logger.info(f"Fetching combined data for {symbol} from multiple sources...")
         try:
-            return await self.fetcher.fetch_symbol_data(symbol, start_date, end_date, interval, self.fetcher.async_fetcher.create_session())
+            # Create a session using the async_fetcher sub-component
+            session = self.fetcher.async_fetcher.create_session()
+            return await self.fetcher.fetch_symbol_data(symbol, start_date, end_date, interval, session)
         except Exception as e:
             self.logger.error(f"Failed to fetch combined data for {symbol}: {e}")
             return {}

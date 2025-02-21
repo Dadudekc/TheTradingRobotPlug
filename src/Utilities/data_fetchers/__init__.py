@@ -10,7 +10,7 @@ from .finnhub_fetcher import FinnhubFetcher
 from .alpaca_fetcher import AlpacaDataFetcher
 from .newsapi_fetcher import NewsAPIFetcher
 from .async_fetcher import AsyncFetcher
-from .main_data_fetcher import DataFetchUtils
+from .main_data_fetcher import DataOrchestrator
 
 __all__ = [
     "YahooFinanceFetcher",

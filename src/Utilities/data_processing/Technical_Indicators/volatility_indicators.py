@@ -46,7 +46,6 @@ if str(utilities_dir.resolve()) not in sys.path:
 try:
     from Utilities.config_manager import ConfigManager, setup_logging
     from Utilities.data.data_store import DataStore
-    from Utilities.db.db_handler import DBHandler
     from Utilities.column_utils import ColumnUtils
 
     print(f"[{script_name}] Imported config_manager, db_handler, data_store, column_utils successfully.")
@@ -442,17 +441,23 @@ class VolatilityIndicators:
 # Example Usage
 # -------------------------------------------------------------------
 def main():
+    script_name = "volatility_indicators"
     logger.info(f"[{script_name}] Entering main()")
+
     try:
-        # Initialize DBHandler
+        # 🛠️ Lazy import to prevent circular imports
+        from Utilities.db.db_handler import DBHandler  
+
+        # ✅ Initialize DBHandler
         db_handler = DBHandler()
         logger.info(f"[{script_name}] DatabaseHandler initialized.")
 
-        # Initialize DataStore
+        # ✅ Initialize ConfigManager & DataStore
+        config_manager = ConfigManager()  # Ensure config is initialized before use
         data_store = DataStore(config=config_manager, logger=logger, use_csv=False)
         logger.info(f"[{script_name}] DataStore initialized.")
 
-        # Load data for a sample symbol
+        # ✅ Load data for a sample symbol
         symbol = "AAPL"
         df = data_store.load_data(symbol)
 
@@ -460,57 +465,54 @@ def main():
             logger.error(f"[{script_name}] No data found for symbol '{symbol}'. Exiting.")
             return
 
-        # Process the DataFrame using ColumnUtils
+        # ✅ Process the DataFrame using ColumnUtils
         try:
-            # Initialize ColumnUtils instance
+            from Utilities.column_utils import ColumnUtils  # Lazy import
             column_utils = ColumnUtils()
-            # Process the DataFrame
             df = column_utils.process_dataframe(df, stage="pre")
             logger.info(f"[{script_name}] DataFrame processed with ColumnUtils.")
         except (KeyError, FileNotFoundError, ValueError) as ve:
-            logger.error(f"[{script_name}] Data processing failed: {ve}")
+            logger.error(f"[{script_name}] Data processing failed: {ve}", exc_info=True)
             return
 
-        # Initialize VolatilityIndicators and apply indicators
+        # ✅ Initialize VolatilityIndicators and apply indicators
+        from Utilities.data_processing.Technical_Indicators.volatility_indicators import VolatilityIndicators  
         volatility_indicators = VolatilityIndicators(logger=logger)
 
-        # Apply indicators
         df = volatility_indicators.apply_indicators(df)
 
-        # Save the DataFrame back to the database
+        # ✅ Save the DataFrame back to the database
         data_store.save_data(df, symbol, overwrite=True)
         logger.info(f"[{script_name}] Data saved with new volatility indicators for symbol '{symbol}'.")
 
-        # Optional: Log or print sample data
+        # ✅ Verify expected columns
         expected_cols = [
-            "bollinger_low",
-            "bollinger_mid",
-            "bollinger_high",
-            "standard_deviation",
-            "historical_volatility",
-            "chandelier_exit_long",
-            "keltner_channel_low",
-            "keltner_channel_basis",
-            "keltner_channel_high",
-            "mae_upper",
-            "mae_lower"
+            "bollinger_low", "bollinger_mid", "bollinger_high",
+            "standard_deviation", "historical_volatility",
+            "chandelier_exit_long", "keltner_channel_low",
+            "keltner_channel_basis", "keltner_channel_high",
+            "mae_upper", "mae_lower"
         ]
         missing_cols = [col for col in expected_cols if col not in df.columns]
         if missing_cols:
-            logger.error(f"[{script_name}] Missing volatility indicator columns: {missing_cols}")
+            logger.error(f"[{script_name}] ❌ Missing volatility indicator columns: {missing_cols}")
         else:
-            logger.info(f"[{script_name}] All volatility indicator columns are present.")
+            logger.info(f"[{script_name}] ✅ All volatility indicator columns are present.")
             print(f"\n[{script_name}] Sample volatility indicators:\n", df[expected_cols].tail())
 
+    except ModuleNotFoundError as mod_err:
+        logger.critical(f"[{script_name}] 🚨 Missing module error: {mod_err}", exc_info=True)
+
     except Exception as e:
-        logger.error(f"[{script_name}] Unexpected error in main(): {e}", exc_info=True)
+        logger.error(f"[{script_name}] ❌ Unexpected error in main(): {e}", exc_info=True)
+
     finally:
         if 'db_handler' in locals() and db_handler:
             try:
                 db_handler.close()
-                logger.info(f"[{script_name}] DatabaseHandler closed.")
+                logger.info(f"[{script_name}] ✅ DatabaseHandler closed.")
             except Exception as ex:
-                logger.error(f"[{script_name}] Error closing DatabaseHandler: {ex}", exc_info=True)
+                logger.error(f"[{script_name}] ❌ Error closing DatabaseHandler: {ex}", exc_info=True)
 
 # -------------------------------------------------------------------
 # Entry Point

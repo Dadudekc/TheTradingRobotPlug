@@ -27,7 +27,7 @@ async def test_main_function():
 
 @pytest.mark.asyncio
 async def test_main():
-    with patch("src.main.DataFetchUtils") as MockFetcher:
+    with patch("src.main.MainDataFetcher") as MockFetcher:
         mock_fetcher = MockFetcher.return_value
         mock_fetcher.fetch_finnhub_quote = AsyncMock(return_value=pd.DataFrame([{
             "current_price": 233.72,
@@ -55,7 +55,7 @@ async def test_main():
 
 @pytest.mark.asyncio
 async def test_get_real_time_quote_exception():
-    with patch("src.main.DataFetchUtils") as MockFetcher:
+    with patch("src.main.MainDataFetcher") as MockFetcher:
         mock_fetcher = MockFetcher.return_value
         mock_fetcher.fetch_finnhub_quote = AsyncMock(side_effect=Exception("API error"))
 

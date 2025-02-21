@@ -1,5 +1,5 @@
 from .base_indicators import BaseIndicator
-from .indicator_unifier import AllIndicatorsUnifier
+from .Technical_Indicators.indicator_unifier import AllIndicatorsUnifier
 from .Technical_Indicators.machine_learning_indicators import MachineLearningIndicators
 from .Technical_Indicators.volume_indicators import VolumeIndicators
 from .Technical_Indicators.volatility_indicators import VolatilityIndicators

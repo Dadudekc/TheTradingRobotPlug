@@ -11,7 +11,7 @@ import aiohttp
 import pandas as pd
 from aioresponses import aioresponses
 from unittest.mock import MagicMock
-from Utilities.main_data_fetcher import DataFetchUtils
+from Utilities.data_fetchers.main_data_fetcher import MainDataFetcher
 
 @pytest.mark.asyncio
 async def test_fetch_polygon_data_success(data_fetch_utils_fixture):
