@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 
 # Import our Backtrader engine.
-from Utilities.backtest_engine.backtrader_engine import BacktraderEngine
+from Utilities.backtesting.backtrader_engine import BacktraderEngine
 
 # Setup a module-level logger.
 logger = logging.getLogger(__name__)

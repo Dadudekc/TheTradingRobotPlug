@@ -16,7 +16,7 @@ from src.Utilities.data_fetchers.main_data_fetcher import DataOrchestrator
 from Utilities.data_processing.Technical_Indicators.indicator_unifier import AllIndicatorsUnifier
 from src.Utilities.indicators.indicator_calculator import IndicatorCalculator
 from src.Utilities.strategies.rsi_macd_strategy import RSIMACDStrategy
-from src.Utilities.backtest_engine.backtrader_engine import Backtester
+from Utilities.backtesting.backtrader_engine import Backtester
 
 # --------------------- TEST DATA --------------------- #
 

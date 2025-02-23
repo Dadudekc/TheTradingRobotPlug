@@ -10,6 +10,7 @@ import pandas as pd
 from textblob import TextBlob
 from typing import Optional
 import logging
+import asyncio
 
 class NewsAPIFetcher:
     def __init__(self, logger: logging.Logger):
