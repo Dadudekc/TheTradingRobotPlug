@@ -86,3 +86,5 @@ TSLA_sentiment.csv
 stocktwits_sentiment.csv
 trade_analyzer.db
 Archive/TradingRobotPlug/
+TSLA_sentiment.csv
+trade_analyzer.db
